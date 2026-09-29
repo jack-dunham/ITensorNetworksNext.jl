@@ -12,9 +12,9 @@ struct CTMEnvironment{V, B, E <: MessageCache, C <: MessageCache}
     gauges::Dict{Int, Any}
 end
 
-edgetensor(env::CTMEnvironment, d) = env.edgetensors[NamedEdge(d)]
-corner(env::CTMEnvironment, d) = env.corners[NamedEdge(d)]
-bond(env::CTMEnvironment, d) = env.bonds[NamedEdge(d)]
+edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
+corner(env::CTMEnvironment, edge) = env.corners[NamedEdge(edge)]
+bond(env::CTMEnvironment, edge) = env.bonds[NamedEdge(edge)]
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
@@ -24,53 +24,61 @@ function Base.copy(env::CTMEnvironment)
 end
 
 """
-    ctm_environment(tn, emb, messages) -> CTMEnvironment
+    ctm_environment(tn, embedding, messages) -> CTMEnvironment
 
 The χ = 1 environment whose edge tensors are the BP `messages` and whose corners are all 1.
 """
-function ctm_environment(tn, emb::PlanarEmbedding, messages)
-    ds = directed_edges(emb)
-    bonds = Dictionary(ds, [Index(1) for _ in ds])
-    elt = eltype(messages[first(ds)])
-    edgetensors = messagecache(ds) do d
-        m = messages[d]
-        return m * ones(elt, (bonds[next_edge(emb, d)],)) *
-            ones(elt, (bonds[prev_edge(emb, reverse(d))],))
+function ctm_environment(tn, embedding::PlanarEmbedding, messages)
+    embedding_edges = directed_edges(embedding)
+    bonds = Dictionary(embedding_edges, [Index(1) for _ in embedding_edges])
+    elt = eltype(messages[first(embedding_edges)])
+    edgetensors = messagecache(embedding_edges) do edge
+        return messages[edge] * ones(elt, (bonds[next_edge(embedding, edge)],)) *
+            ones(elt, (bonds[prev_edge(embedding, reverse(edge))],))
     end
-    corners = messagecache(d -> ones(elt, (bonds[d], bonds[next_edge(emb, d)])), ds)
-    return CTMEnvironment(emb, edgetensors, corners, bonds, Dict{Int, Any}())
+    corners = messagecache(embedding_edges) do edge
+        return ones(elt, (bonds[edge], bonds[next_edge(embedding, edge)]))
+    end
+    return CTMEnvironment(embedding, edgetensors, corners, bonds, Dict{Int, Any}())
 end
 
 # A corner `c[w => v]` touches `w` and the far end of `next_edge(w => v)`.
-function environment_tensors(env::CTMEnvironment, v; exclude = ())
-    emb = env.embedding
-    ds = [NamedEdge(w => v) for w in neighbors(emb.graph, v) if w ∉ exclude]
+function environment_tensors(env::CTMEnvironment, vertex; exclude = ())
+    embedding = env.embedding
+    incoming = [
+        NamedEdge(neighbor => vertex)
+            for neighbor in neighbors(embedding.graph, vertex) if neighbor ∉ exclude
+    ]
     return [
-        [edgetensor(env, d) for d in ds];
-        [corner(env, d) for d in ds if dst(next_edge(emb, d)) ∉ exclude]
+        [edgetensor(env, edge) for edge in incoming];
+        [
+            corner(env, edge) for
+                edge in incoming if dst(next_edge(embedding, edge)) ∉ exclude
+        ]
     ]
 end
 
-function environment_tensors(env::CTMEnvironment, e::Union{AbstractEdge, Pair})
-    emb = env.embedding
-    d = NamedEdge(e)
-    r = reverse(d)
+function environment_tensors(env::CTMEnvironment, edge::Union{AbstractEdge, Pair})
+    embedding = env.embedding
+    forward = NamedEdge(edge)
+    backward = reverse(forward)
     return [
-        edgetensor(env, d), edgetensor(env, r), corner(env, d),
-        corner(env, prev_edge(emb, d)), corner(env, r), corner(env, prev_edge(emb, r)),
+        edgetensor(env, forward), edgetensor(env, backward),
+        corner(env, forward), corner(env, prev_edge(embedding, forward)),
+        corner(env, backward), corner(env, prev_edge(embedding, backward)),
     ]
 end
 
 # A face is given as its cycle of directed edges.
 function environment_tensors(env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
-    return [corner(env, d) for d in face]
+    return [corner(env, edge) for edge in face]
 end
 
 function kikuchi_terms(tn, env::CTMEnvironment)
-    g = env.embedding.graph
+    graph = env.embedding.graph
     numerator = (
-        vertex_scalars(tn, env, collect(vertices(g))),
+        vertex_scalars(tn, env, collect(vertices(graph))),
         [face_scalar(tn, env, face) for face in env.embedding.faces],
     )
-    return numerator, edge_scalars(tn, env, collect(edges(g)))
+    return numerator, edge_scalars(tn, env, collect(edges(graph)))
 end
