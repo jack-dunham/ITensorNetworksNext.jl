@@ -1,7 +1,8 @@
 using Dictionaries: set!
 using Graphs: dst, src
 using ITensorBase: Index, name, names
-using LinearAlgebra: Diagonal, I, eigen, inv, norm
+using LinearAlgebra: Diagonal, I, eigen, inv, norm, qr
+using Random: Xoshiro
 using TensorAlgebra: matricize, unmatricize
 
 @kwdef struct DenseEig <: AbstractAlgorithm
@@ -16,17 +17,30 @@ function default_algorithm(::typeof(invariant_subspace), ::Type{<:Tuple}; kwargs
 end
 
 """
-    invariant_subspace(alg::DenseEig, matrix, maxdim) -> (right_basis, left_basis, eigenvalues)
+    TransferProduct(matrices)
 
-Dominant invariant subspace of `matrix`: `matrix * right_basis ≈ right_basis * Diagonal(eigenvalues)`,
-`left_basis * matrix ≈ Diagonal(eigenvalues) * left_basis` and `left_basis * right_basis ≈ I`.
-Eigenvalues of equal modulus are kept or dropped together.
+The product `matrices[1] * matrices[2] * ⋯`, held unformed. Multiplying it by a block from
+either side applies the factors one at a time.
 """
-function invariant_subspace(alg::DenseEig, matrix::AbstractMatrix, maxdim::Integer)
-    decomposition = eigen(matrix)
-    order = sortperm(abs.(decomposition.values); rev = true)
-    eigenvalues, eigenvectors = decomposition.values[order], decomposition.vectors[:, order]
+struct TransferProduct{M <: AbstractMatrix}
+    matrices::Vector{M}
+end
 
+function Base.size(product::TransferProduct, dim::Integer)
+    return size(dim == 1 ? first(product.matrices) : last(product.matrices), dim)
+end
+Base.eltype(product::TransferProduct) = mapreduce(eltype, promote_type, product.matrices)
+Base.Matrix(product::TransferProduct) = foldl(*, product.matrices)
+function Base.:*(product::TransferProduct, block::AbstractMatrix)
+    return foldr(*, product.matrices; init = block)
+end
+function Base.:*(block::AbstractMatrix, product::TransferProduct)
+    return foldl(*, product.matrices; init = block)
+end
+
+# Number of leading `eigenvalues`, sorted by decreasing modulus, to keep: at most `maxdim`, above
+# `alg.rtol` relative to the largest, and never splitting eigenvalues of equal modulus.
+function kept_count(alg, eigenvalues, maxdim)
     scale = abs(first(eigenvalues))
     nkept = min(maxdim, count(value -> abs(value) > alg.rtol * scale, eigenvalues))
     while 0 < nkept < length(eigenvalues) &&
@@ -39,10 +53,87 @@ function invariant_subspace(alg::DenseEig, matrix::AbstractMatrix, maxdim::Integ
             "`maxdim = $maxdim` splits the dominant eigenvalue multiplet; raise `maxdim`."
         )
     )
+    return nkept
+end
+
+"""
+    invariant_subspace(alg::DenseEig, matrix, maxdim) -> (right_basis, left_basis, eigenvalues)
+
+Dominant invariant subspace of `matrix`: `matrix * right_basis ≈ right_basis * Diagonal(eigenvalues)`,
+`left_basis * matrix ≈ Diagonal(eigenvalues) * left_basis` and `left_basis * right_basis ≈ I`.
+Eigenvalues of equal modulus are kept or dropped together.
+"""
+function invariant_subspace(alg::DenseEig, matrix, maxdim::Integer)
+    decomposition = eigen(Matrix(matrix))
+    order = sortperm(abs.(decomposition.values); rev = true)
+    eigenvalues, eigenvectors = decomposition.values[order], decomposition.vectors[:, order]
+    nkept = kept_count(alg, eigenvalues, maxdim)
 
     identity_columns = Matrix{eltype(eigenvectors)}(I, size(eigenvectors, 1), nkept)
     left_basis = transpose(transpose(eigenvectors) \ identity_columns)
     return eigenvectors[:, 1:nkept], left_basis, eigenvalues[1:nkept]
+end
+
+"""
+    SubspaceIteration(; oversampling = 2, tol = 1.0e-12, maxiter = 1000, seed = 0, rtol, degeneracy_rtol)
+
+Two-sided block subspace iteration with `maxdim + oversampling` vectors, started from random
+blocks drawn with `seed`. It reads `matrix` only through `matrix * block` and `block * matrix`,
+so `matrix` can be a `TransferProduct`. It stops once the kept Ritz pairs have relative
+residual below `tol` on both sides, and throws after `maxiter` iterations otherwise.
+"""
+@kwdef struct SubspaceIteration <: AbstractAlgorithm
+    oversampling::Int = 2
+    tol::Float64 = 1.0e-12
+    maxiter::Int = 1000
+    seed::Int = 0
+    rtol::Float64 = 1.0e-12
+    degeneracy_rtol::Float64 = 1.0e-10
+end
+
+orthonormal_columns(block) = Matrix(qr(block).Q)
+
+function invariant_subspace(alg::SubspaceIteration, matrix, maxdim::Integer)
+    dim = size(matrix, 1)
+    nblock = min(dim, maxdim + alg.oversampling)
+    rng = Xoshiro(alg.seed)
+    right = orthonormal_columns(randn(rng, eltype(matrix), dim, nblock))
+    left = transpose(orthonormal_columns(randn(rng, eltype(matrix), dim, nblock)))
+
+    residual = Inf
+    for _ in 1:alg.maxiter
+        right_image = matrix * right
+        left_image = left * matrix
+
+        # Rayleigh–Ritz on the pair of blocks.
+        overlap = left * right
+        decomposition = eigen(overlap \ (left * right_image))
+        order = sortperm(abs.(decomposition.values); rev = true)
+        eigenvalues = decomposition.values[order]
+        ritz_vectors = decomposition.vectors[:, order]
+        nkept = kept_count(alg, eigenvalues, maxdim)
+
+        kept = 1:nkept
+        right_basis = (right * ritz_vectors)[:, kept]
+        left_basis = (ritz_vectors \ (overlap \ left))[kept, :]
+        values = Diagonal(eigenvalues[kept])
+        scale = abs(first(eigenvalues))
+        right_residual =
+            norm((right_image * ritz_vectors)[:, kept] - right_basis * values) /
+            (scale * norm(right_basis))
+        left_residual =
+            norm((ritz_vectors \ (overlap \ left_image))[kept, :] - values * left_basis) /
+            (scale * norm(left_basis))
+        residual = max(right_residual, left_residual)
+        residual < alg.tol && return right_basis, left_basis, eigenvalues[kept]
+
+        right = orthonormal_columns(right_image)
+        left = transpose(orthonormal_columns(transpose(left_image)))
+    end
+    return error(
+        "`SubspaceIteration` stopped after $(alg.maxiter) iterations with residual " *
+            "$residual, not below `tol` = $(alg.tol)."
+    )
 end
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
@@ -119,7 +210,7 @@ function face_update!(
 
     frozen_dim = length(bond(env, first(face_edges)))
     right_basis, left_basis, eigenvalues = invariant_subspace(
-        alg, foldl(*, transfer_matrices), frozen ? frozen_dim : maxdim
+        alg, TransferProduct(transfer_matrices), frozen ? frozen_dim : maxdim
     )
     bond_dim = length(eigenvalues)
     if frozen && bond_dim != frozen_dim
