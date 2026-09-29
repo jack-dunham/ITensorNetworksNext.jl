@@ -1,3 +1,4 @@
+using Dictionaries: set!
 using Graphs: dst, neighbors, src
 using ITensorBase: Index, name, names
 using LinearAlgebra: Diagonal, I, eigen, inv, norm
@@ -27,7 +28,7 @@ function invariant_subspace(alg::DenseEig, Λ::AbstractMatrix, maxdim::Integer)
     scale = abs(first(vals))
     χ = min(maxdim, count(λ -> abs(λ) > alg.rtol * scale, vals))
     while 0 < χ < length(vals) &&
-            abs(abs(vals[χ]) - abs(vals[χ + 1])) ≤ alg.degeneracy_rtol * scale
+            abs(abs(vals[χ]) - abs(vals[χ + 1])) ≤ alg.degeneracy_rtol * abs(vals[χ])
         χ -= 1
     end
     χ > 0 || throw(
