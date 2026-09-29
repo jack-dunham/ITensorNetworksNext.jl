@@ -9,13 +9,13 @@ struct PlanarEmbedding{V, G <: AbstractGraph}
     leftface::Dictionary{NamedEdge{V}, Int}
 end
 
-function _next_dart(rotation, d)
+function _next_edge(rotation, d)
     u, v = src(d), dst(d)
     ws = rotation[v]
     return NamedEdge(v => ws[mod1(findfirst(==(u), ws) - 1, length(ws))])
 end
 
-function _prev_dart(rotation, d)
+function _prev_edge(rotation, d)
     v, w = src(d), dst(d)
     ws = rotation[v]
     return NamedEdge(ws[mod1(findfirst(==(w), ws) + 1, length(ws))] => v)
@@ -49,7 +49,7 @@ function planar_embedding(g::AbstractGraph, position)
     for e in edges(g), d in (NamedEdge{V}(e), reverse(NamedEdge{V}(e)))
         haskey(leftface, d) && continue
         cycle = [d]
-        while (d′ = _next_dart(rotation, last(cycle))) != d
+        while (d′ = _next_edge(rotation, last(cycle))) != d
             push!(cycle, d′)
         end
         if _signed_area(position, cycle) < 0
@@ -68,10 +68,10 @@ function planar_embedding(g::AbstractGraph, position)
     return PlanarEmbedding{V, typeof(g)}(g, rotation, faces, leftface)
 end
 
-next_dart(emb::PlanarEmbedding, d) = _next_dart(emb.rotation, NamedEdge(d))
-prev_dart(emb::PlanarEmbedding, d) = _prev_dart(emb.rotation, NamedEdge(d))
+next_edge(emb::PlanarEmbedding, d) = _next_edge(emb.rotation, NamedEdge(d))
+prev_edge(emb::PlanarEmbedding, d) = _prev_edge(emb.rotation, NamedEdge(d))
 leftface(emb::PlanarEmbedding, d) = emb.leftface[NamedEdge(d)]
-darts(emb::PlanarEmbedding) = collect(keys(emb.leftface))
+directed_edges(emb::PlanarEmbedding) = collect(keys(emb.leftface))
 
 # Coordinates matching NetworkX `hexagonal_lattice_graph`, whose node `(i, j)` is `(j + 1, i + 1)` here.
 function hexagonal_position((j, i))
