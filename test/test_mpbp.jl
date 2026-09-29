@@ -2,12 +2,12 @@ using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, NamedTensor, inds, name
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: DenseEig, ITensorNetwork, beliefpropagation, bethe_free_entropy,
-    contract_network, corner, ctm_environment, ctmrg, darts, edgetensor, expect,
-    face_update!, hexagonal_position, invariant_subspace, leftface, linkinds,
-    message_environment, normnetwork, planar_embedding, tensornetwork, vertex_scalar,
-    vertex_term
+    contract_network, ctm_environment, ctmrg, darts, expect, face_update!,
+    hexagonal_position, invariant_subspace, leftface, linkinds, normnetwork,
+    planar_embedding, tensornetwork, vertex_scalar, vertex_term
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
+using StableRNGs: StableRNG
 using Test: @test, @test_throws, @testset
 
 function ising_setup(g, β; h = 0.1, sz_vertices = [])
@@ -50,6 +50,8 @@ const LATTICES = (
             @test VL * Λ ≈ Diagonal(λ) * VL
             @test VL * VR ≈ Matrix(I, χ, χ)
         end
+        _, _, λ = invariant_subspace(DenseEig(), Diagonal([1.0, 5.0e-11, 0.0]), 3)
+        @test length(λ) == 2
     end
 
     function run_sweeps!(env, tn; maxdim, nsweeps)
@@ -82,17 +84,18 @@ const LATTICES = (
         emb = planar_embedding(g, v -> v)
         env = run_sweeps!(bp_environment(tn, g, emb), tn; maxdim = 2, nsweeps = 60)
         logz = bethe_free_entropy(tn, env)
+        rng = StableRNG(1)
         d = first(
             filter(
                 d -> all(!iszero, (leftface(emb, d), leftface(emb, reverse(d)))),
                 darts(emb)
             )
         )
-        # At a fixed point log Z_B is exactly constant in any single tensor, so the tensors on
-        # `d` and `reverse(d)` are perturbed together to give a nonzero second-order change.
+        # A single edge tensor leaves log Z_B unchanged at the fixed point, so the pair on
+        # `d` and `reverse(d)` is perturbed together.
         for field in (:edgetensors, :corners)
             ts = [getfield(env, field)[x] for x in (d, reverse(d))]
-            δts = [randn(eltype(t), Tuple(inds(t))) for t in ts]
+            δts = [randn(rng, eltype(t), Tuple(inds(t))) for t in ts]
             change(ε) = begin
                 env′ = copy(env)
                 for (x, t, δt) in zip((d, reverse(d)), ts, δts)
@@ -145,11 +148,12 @@ const LATTICES = (
         tn, _ = ising_setup(g, 0.4)
         emb = planar_embedding(g, v -> v)
         z = exp(bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)))
+        rng = StableRNG(2)
         tn_g = ITensorNetwork(Dict(v => tn[v] for v in vertices(tn)))
         for e in edges(g)
             i = only(linkinds(tn, e))
             j = Index(length(i))
-            G = randn(length(i), length(i)) + 3I
+            G = randn(rng, length(i), length(i)) + 3I
             tn_g[src(e)] = tn_g[src(e)] * NamedTensor(G, (name(i), name(j)))
             tn_g[dst(e)] = tn_g[dst(e)] * NamedTensor(inv(G), (name(j), name(i)))
         end
@@ -164,15 +168,13 @@ const LATTICES = (
         l = Dict(e => Index(2) for e in edges(g))
         l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
         s = Dict(v => Index(2) for v in vertices(g))
+        rng = StableRNG(3)
         ψ = tensornetwork(vertices(g)) do v
-            return randn((s[v], map(e -> l[e], incident_edges(g, v))...))
+            return randn(rng, (s[v], map(e -> l[e], incident_edges(g, v))...))
         end
         nn = normnetwork(ψ)
         emb = planar_embedding(g, v -> v)
-        env = ctmrg(
-            nn, emb; maxdim = 8, stopping_criterion = sc,
-            messages = message_environment(one, nn)
-        )
+        env = ctmrg(nn, emb; maxdim = 8, stopping_criterion = sc)
         @test exp(bethe_free_entropy(nn, env)) ≈ contract_network(nn)[] rtol = 1.0e-10
     end
 
