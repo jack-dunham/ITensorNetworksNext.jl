@@ -26,6 +26,7 @@ function invariant_subspace(alg::DenseEig, matrix::AbstractMatrix, maxdim::Integ
     decomposition = eigen(matrix)
     order = sortperm(abs.(decomposition.values); rev = true)
     eigenvalues, eigenvectors = decomposition.values[order], decomposition.vectors[:, order]
+
     scale = abs(first(eigenvalues))
     nkept = min(maxdim, count(value -> abs(value) > alg.rtol * scale, eigenvalues))
     while 0 < nkept < length(eigenvalues) &&
@@ -38,6 +39,7 @@ function invariant_subspace(alg::DenseEig, matrix::AbstractMatrix, maxdim::Integ
             "`maxdim = $maxdim` splits the dominant eigenvalue multiplet; raise `maxdim`."
         )
     )
+
     identity_columns = Matrix{eltype(eigenvectors)}(I, size(eigenvectors, 1), nkept)
     left_basis = transpose(transpose(eigenvectors) \ identity_columns)
     return eigenvectors[:, 1:nkept], left_basis, eigenvalues[1:nkept]
@@ -51,7 +53,9 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, face::Int, position::In
     outgoing = face_edges[position]
     vertex = src(outgoing)
     exclude = (src(incoming), dst(outgoing))
+
     transfer = contract_network([[tn[vertex]]; environment_tensors(env, vertex; exclude)])
+
     for reversed in (reverse(incoming), reverse(outgoing))
         bond_index = bond(env, reversed)
         if name(bond_index) ∉ names(transfer)
@@ -59,6 +63,7 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, face::Int, position::In
             transfer = transfer * ones(eltype(transfer), (bond_index,))
         end
     end
+
     @assert issetequal(
         names(transfer),
         name.((cut_inds(tn, env, incoming)..., cut_inds(tn, env, outgoing)...))
@@ -96,10 +101,12 @@ function face_update!(
     embedding = env.embedding
     face_edges = embedding.faces[face]
     nedges = length(face_edges)
-    nedges ≥ 3 ||
+    if nedges < 3
         throw(
-        ArgumentError("Face $face has $nedges edges; `face_update!` needs at least 3.")
-    )
+            ArgumentError("Face $face has $nedges edges; `face_update!` needs at least 3.")
+        )
+    end
+
     cut_indices = [cut_inds(tn, env, edge) for edge in face_edges]
     transfer_tensors = [corner_transfer_matrix(tn, env, face, i) for i in 1:nedges]
     transfer_matrices = [
@@ -109,17 +116,20 @@ function face_update!(
                 cut_indices[i]
             ) for i in 1:nedges
     ]
+
     frozen_dim = length(bond(env, first(face_edges)))
     right_basis, left_basis, eigenvalues = invariant_subspace(
         alg, foldl(*, transfer_matrices), frozen ? frozen_dim : maxdim
     )
     bond_dim = length(eigenvalues)
-    frozen && bond_dim != frozen_dim &&
+    if frozen && bond_dim != frozen_dim
         throw(
-        ArgumentError(
-            "Face $face keeps $bond_dim eigenvalues but its frozen bonds have dimension $frozen_dim."
+            ArgumentError(
+                "Face $face keeps $bond_dim eigenvalues but its frozen bonds have dimension $frozen_dim."
+            )
         )
-    )
+    end
+
     eigenvalue_corner = Matrix(Diagonal(eigenvalues))
     if align
         previous_basis = get(env.gauges, face, nothing)
@@ -131,31 +141,37 @@ function face_update!(
         end
         env.gauges[face] = right_basis
     end
+
     right_bases = Vector{Matrix{eltype(right_basis)}}(undef, nedges)
     left_bases = Vector{Matrix{eltype(left_basis)}}(undef, nedges)
     right_bases[nedges], left_bases[nedges] = right_basis, left_basis
     for i in nedges:-1:2
         right_bases[i - 1] = transfer_matrices[i] * right_bases[i]
     end
+
     left_bases[1] = left_bases[nedges] * transfer_matrices[1]
     for i in 2:(nedges - 2)
         left_bases[i] = left_bases[i - 1] * transfer_matrices[i]
     end
     left_bases[nedges - 1] =
         (eigenvalue_corner \ left_bases[nedges - 2]) * transfer_matrices[nedges - 1]
+
     new_bonds = if frozen
         [bond(env, edge) for edge in face_edges]
     else
         [Index(bond_dim) for _ in 1:nedges]
     end
+
     for i in 1:nedges
         edge = face_edges[i]
         reversed = reverse(edge)
+
         right_projector =
             unmatricize(right_bases[i], cut_indices[i], (new_bonds[mod1(i - 1, nedges)],))
         left_projector = unmatricize(
             transpose(left_bases[i]), cut_indices[i], (new_bonds[mod1(i + 1, nedges)],)
         )
+
         env.edgetensors[reversed] = peel(
             right_projector, corner(env, reversed),
             bond(env, reversed), bond(env, next_edge(embedding, reversed))
@@ -166,6 +182,7 @@ function face_update!(
             bond(env, reversed), bond(env, before_reversed)
         )
     end
+
     elt = promote_type(eltype(right_basis), eltype(left_basis), eltype(eigenvalue_corner))
     for i in 1:nedges
         corner_matrix = if i == nedges - 1
