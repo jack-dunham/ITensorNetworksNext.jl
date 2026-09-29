@@ -60,17 +60,16 @@ function environment_tensors(env::CTMEnvironment, e::Union{AbstractEdge, Pair})
     ]
 end
 
-# An `Int` is read as a face index, so vertices of a `CTMEnvironment` cannot be `Int`s.
-function environment_tensors(env::CTMEnvironment, f::Int)
-    return [corner(env, d) for d in env.embedding.faces[f]]
+# A face is given as its cycle of darts.
+function environment_tensors(env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
+    return [corner(env, d) for d in face]
 end
 
 function kikuchi_terms(tn, env::CTMEnvironment)
     g = env.embedding.graph
-    faces = eachindex(env.embedding.faces)
     numerator = (
         vertex_scalars(tn, env, collect(vertices(g))),
-        narrow_map(f -> face_scalar(tn, env, f), faces),
+        [face_scalar(tn, env, face) for face in env.embedding.faces],
     )
     return numerator, edge_scalars(tn, env, collect(edges(g)))
 end
