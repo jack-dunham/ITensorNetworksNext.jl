@@ -48,11 +48,9 @@ function planar_embedding(g::AbstractGraph, position)
     nouter = 0
     for e in edges(g), d in (NamedEdge{V}(e), reverse(NamedEdge{V}(e)))
         haskey(leftface, d) && continue
-        cycle = NamedEdge{V}[]
-        d′ = d
-        while !(d′ in cycle)
+        cycle = [d]
+        while (d′ = _next_dart(rotation, last(cycle))) != d
             push!(cycle, d′)
-            d′ = _next_dart(rotation, d′)
         end
         if _signed_area(position, cycle) < 0
             nouter += 1
