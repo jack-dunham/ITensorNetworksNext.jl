@@ -3,6 +3,7 @@ using Graphs: dst, neighbors, src
 using ITensorBase: Index, name, names
 using LinearAlgebra: Diagonal, I, eigen, inv, norm
 using NamedGraphs: NamedEdge
+using TensorAlgebra: matricize
 
 @kwdef struct DenseEig <: AbstractAlgorithm
     rtol::Float64 = 1.0e-12
@@ -36,7 +37,8 @@ function invariant_subspace(alg::DenseEig, Λ::AbstractMatrix, maxdim::Integer)
             "`maxdim = $maxdim` splits the dominant eigenvalue multiplet; raise `maxdim`."
         )
     )
-    return vecs[:, 1:χ], inv(vecs)[1:χ, :], vals[1:χ]
+    VL = transpose(transpose(vecs) \ Matrix{eltype(vecs)}(I, size(vecs, 1), χ))
+    return vecs[:, 1:χ], VL, vals[1:χ]
 end
 
 cut_names(tn, env::CTMEnvironment, d) = (linknames(tn, d)..., name(bond(env, reverse(d))))
@@ -72,7 +74,7 @@ end
 
 # `X` equals `A` contracted with corner `c` over `k`; returns `A`, whose leg `s` becomes `k`.
 function peel(X, c, s, k)
-    M = tomatrix(c, (name(k),), (name(s),))
+    M = matricize(c, (name(k),), (name(s),))
     return X * fromarray(inv(M), (name(s), name(k)), (length(s), length(k)))
 end
 
@@ -95,7 +97,7 @@ function face_update!(
     m ≥ 3 || throw(ArgumentError("Face $f has $m darts; `face_update!` needs at least 3."))
     cuts = [cut_names(tn, env, d) for d in ds]
     Cs = [corner_transfer_matrix(tn, env, f, i) for i in 1:m]
-    Cm = [tomatrix(Cs[i] / norm(Cs[i]), cuts[mod1(i - 1, m)], cuts[i]) for i in 1:m]
+    Cm = [matricize(Cs[i] / norm(Cs[i]), cuts[mod1(i - 1, m)], cuts[i]) for i in 1:m]
     VR, VL, λ = invariant_subspace(alg, foldl(*, Cm), maxdim)
     χ = length(λ)
     VRs = Vector{Matrix{eltype(VR)}}(undef, m)
