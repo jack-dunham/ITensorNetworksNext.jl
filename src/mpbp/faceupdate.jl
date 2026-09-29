@@ -93,7 +93,7 @@ function face_update!(
     emb = env.embedding
     ds = emb.faces[f]
     m = length(ds)
-    m ≥ 3 || throw(ArgumentError("Face $f has $m darts; `face_update!` needs at least 3."))
+    m ≥ 3 || throw(ArgumentError("Face $f has $m edges; `face_update!` needs at least 3."))
     cuts = [cut_inds(tn, env, d) for d in ds]
     Cs = [corner_transfer_matrix(tn, env, f, i) for i in 1:m]
     Cm = [matricize(Cs[i] / norm(Cs[i]), cuts[mod1(i - 1, m)], cuts[i]) for i in 1:m]
@@ -132,8 +132,8 @@ function face_update!(
         P = unmatricize(VRs[j], cuts[j], (β[mod1(j - 1, m)],))
         Q = unmatricize(transpose(VLs[j]), cuts[j], (β[mod1(j + 1, m)],))
         env.edgetensors[r] =
-            peel(P, corner(env, r), bond(env, r), bond(env, next_dart(emb, r)))
-        pr = prev_dart(emb, r)
+            peel(P, corner(env, r), bond(env, r), bond(env, next_edge(emb, r)))
+        pr = prev_edge(emb, r)
         env.edgetensors[d] = peel(Q, corner(env, pr), bond(env, r), bond(env, pr))
     end
     elt = promote_type(eltype(VR), eltype(VL), eltype(Λ))
