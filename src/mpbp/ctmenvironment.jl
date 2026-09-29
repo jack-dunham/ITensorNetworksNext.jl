@@ -21,10 +21,6 @@ function Base.copy(env::CTMEnvironment)
     )
 end
 
-function tomatrix(t, rownames, colnames)
-    a = Array(unnamed(align(t, (rownames..., colnames...))))
-    return reshape(a, prod(size(a)[1:length(rownames)]; init = 1), :)
-end
 fromarray(M, names, dims) = NamedTensor(reshape(M, dims...), names)
 function namedsize(t, ns)
     rest = setdiff(names(t), ns)
