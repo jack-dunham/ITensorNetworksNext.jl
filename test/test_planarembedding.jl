@@ -1,6 +1,6 @@
 using Graphs: edges, ne, nv
 using ITensorNetworksNext:
-    darts, hexagonal_position, leftface, next_dart, planar_embedding, prev_dart
+    directed_edges, hexagonal_position, leftface, next_edge, planar_embedding, prev_edge
 using NamedGraphs: named_grid, named_hexagonal_lattice_graph
 using Test: @test, @test_throws, @testset
 
@@ -13,10 +13,10 @@ using Test: @test, @test_throws, @testset
         @test length(emb.faces) == nfaces
         @test all(f -> length(f) == facelength, emb.faces)
         @test nv(g) - ne(g) + length(emb.faces) == 1
-        @test length(darts(emb)) == 2 * ne(g)
-        for d in darts(emb)
-            @test prev_dart(emb, next_dart(emb, d)) == d
-            @test leftface(emb, next_dart(emb, d)) == leftface(emb, d)
+        @test length(directed_edges(emb)) == 2 * ne(g)
+        for d in directed_edges(emb)
+            @test prev_edge(emb, next_edge(emb, d)) == d
+            @test leftface(emb, next_edge(emb, d)) == leftface(emb, d)
         end
         for e in edges(g)
             fs = (leftface(emb, e), leftface(emb, reverse(e)))

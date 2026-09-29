@@ -29,25 +29,25 @@ end
 The χ = 1 environment whose edge tensors are the BP `messages` and whose corners are all 1.
 """
 function ctm_environment(tn, emb::PlanarEmbedding, messages)
-    ds = darts(emb)
+    ds = directed_edges(emb)
     bonds = Dictionary(ds, [Index(1) for _ in ds])
     elt = eltype(messages[first(ds)])
     edgetensors = messagecache(ds) do d
         m = messages[d]
-        return m * ones(elt, (bonds[next_dart(emb, d)],)) *
-            ones(elt, (bonds[prev_dart(emb, reverse(d))],))
+        return m * ones(elt, (bonds[next_edge(emb, d)],)) *
+            ones(elt, (bonds[prev_edge(emb, reverse(d))],))
     end
-    corners = messagecache(d -> ones(elt, (bonds[d], bonds[next_dart(emb, d)])), ds)
+    corners = messagecache(d -> ones(elt, (bonds[d], bonds[next_edge(emb, d)])), ds)
     return CTMEnvironment(emb, edgetensors, corners, bonds, Dict{Int, Any}())
 end
 
-# A corner `c[w => v]` touches `w` and the far end of `next_dart(w => v)`.
+# A corner `c[w => v]` touches `w` and the far end of `next_edge(w => v)`.
 function environment_tensors(env::CTMEnvironment, v; exclude = ())
     emb = env.embedding
     ds = [NamedEdge(w => v) for w in neighbors(emb.graph, v) if w ∉ exclude]
     return [
         [edgetensor(env, d) for d in ds];
-        [corner(env, d) for d in ds if dst(next_dart(emb, d)) ∉ exclude]
+        [corner(env, d) for d in ds if dst(next_edge(emb, d)) ∉ exclude]
     ]
 end
 
@@ -57,11 +57,11 @@ function environment_tensors(env::CTMEnvironment, e::Union{AbstractEdge, Pair})
     r = reverse(d)
     return [
         edgetensor(env, d), edgetensor(env, r), corner(env, d),
-        corner(env, prev_dart(emb, d)), corner(env, r), corner(env, prev_dart(emb, r)),
+        corner(env, prev_edge(emb, d)), corner(env, r), corner(env, prev_edge(emb, r)),
     ]
 end
 
-# A face is given as its cycle of darts.
+# A face is given as its cycle of directed edges.
 function environment_tensors(env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
     return [corner(env, d) for d in face]
 end
