@@ -262,7 +262,7 @@ end
 # with the incoming messages leaves the surviving bond legs dangling, so assign the bra/ket pairing
 # the norm network gives this edge (the same convention as `similar_message_environment`), in which
 # the message is positive semidefinite and its trace is a positive normalization.
-function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
+function normnetwork_message_update!(algorithm, cache, factors::NormNetwork, edge)
     new_tensor = updated_message(algorithm, cache, factors, edge)
     branames = linknames(branetwork(factors), edge)
     ketnames = linknames(ketnetwork(factors), edge)
@@ -273,6 +273,10 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNet
     end
     cache[edge] = new_message
     return cache
+end
+
+function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
+    return normnetwork_message_update!(algorithm, cache, factors, edge)
 end
 
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===
