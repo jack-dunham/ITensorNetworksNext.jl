@@ -1,6 +1,6 @@
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using ITensorBase: unnamed
-using LinearAlgebra: diag, norm
+using LinearAlgebra: eigvals, norm
 using NamedGraphs: all_edges
 
 default_ctmrg_messages(tn) = Dict(e => ones(Tuple(linkinds(tn, e))) for e in all_edges(tn))
@@ -13,6 +13,8 @@ end
 @kwdef struct FaceUpdate{Alg} <: AbstractAlgorithm
     maxdim::Int
     subspace_algorithm::Alg
+    frozen::Bool = false
+    align::Bool = false
 end
 
 function AIE.update!(u::FaceUpdate, env, problem::CTMRGProblem, f)
@@ -21,12 +23,14 @@ function AIE.update!(u::FaceUpdate, env, problem::CTMRGProblem, f)
         problem.network,
         f;
         maxdim = u.maxdim,
-        alg = u.subspace_algorithm
+        alg = u.subspace_algorithm,
+        frozen = u.frozen,
+        align = u.align
     )
 end
 
-# Change in the spectrum of each face's eigenvalue corner `c[d_{m-1}]`, divided by its largest
-# eigenvalue, whose scale drifts between sweeps without changing Z_B.
+# Change in the eigenvalues of each face's eigenvalue corner `c[d_{m-1}]`, divided by the
+# largest, whose scale drifts between sweeps without changing Z_B.
 function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
     return maximum(env1.embedding.faces; init = 0.0) do ds
         s1, s2 = corner_spectrum(env1, ds[end - 1]), corner_spectrum(env2, ds[end - 1])
@@ -34,7 +38,7 @@ function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
         return norm(s1 / last(s1) - s2 / last(s2))
     end
 end
-corner_spectrum(env, d) = sort(abs.(diag(unnamed(corner(env, d)))))
+corner_spectrum(env, d) = sort(abs.(eigvals(unnamed(corner(env, d)))))
 
 """
     ctmrg(

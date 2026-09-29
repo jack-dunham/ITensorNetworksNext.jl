@@ -79,17 +79,24 @@ function peel(X, c, s, k)
 end
 
 """
-    face_update!(env, tn, f; maxdim, alg) -> env
+    face_update!(env, tn, f; maxdim, alg, frozen = false, align = false) -> env
 
 Replace the corners, bonds and edge tensors of face `f` with the MP-BP solution of the face
 given the rest of `env`.
+
+With `frozen = true` the face keeps its bond indices, so the kept subspace must have their
+dimension. With `align = true` the new subspace basis is rotated onto the one the previous
+update of `f` stored, which keeps the tensors continuous between updates when eigenvalues
+share a modulus; the eigenvalue corner is then a full matrix.
 """
 function face_update!(
         env::CTMEnvironment,
         tn,
         f::Int;
         maxdim::Integer,
-        alg::AbstractAlgorithm
+        alg::AbstractAlgorithm,
+        frozen::Bool = false,
+        align::Bool = false
     )
     emb = env.embedding
     ds = emb.faces[f]
@@ -98,8 +105,24 @@ function face_update!(
     cuts = [cut_names(tn, env, d) for d in ds]
     Cs = [corner_transfer_matrix(tn, env, f, i) for i in 1:m]
     Cm = [matricize(Cs[i] / norm(Cs[i]), cuts[mod1(i - 1, m)], cuts[i]) for i in 1:m]
-    VR, VL, λ = invariant_subspace(alg, foldl(*, Cm), maxdim)
+    χfrozen = length(bond(env, first(ds)))
+    VR, VL, λ = invariant_subspace(alg, foldl(*, Cm), frozen ? χfrozen : maxdim)
     χ = length(λ)
+    frozen && χ != χfrozen &&
+        throw(
+        ArgumentError(
+            "Face $f keeps $χ eigenvalues but its frozen bonds have dimension $χfrozen."
+        )
+    )
+    Λ = Matrix(Diagonal(λ))
+    if align
+        reference = get(env.gauges, f, nothing)
+        if !isnothing(reference) && size(reference) == size(VR)
+            g = VL * reference
+            VR, VL, Λ = VR * g, g \ VL, g \ (Λ * g)
+        end
+        env.gauges[f] = VR
+    end
     VRs = Vector{Matrix{eltype(VR)}}(undef, m)
     VLs = Vector{Matrix{eltype(VL)}}(undef, m)
     VRs[m], VLs[m] = VR, VL
@@ -110,8 +133,8 @@ function face_update!(
     for j in 2:(m - 2)
         VLs[j] = VLs[j - 1] * Cm[j]
     end
-    VLs[m - 1] = Diagonal(inv.(λ)) * VLs[m - 2] * Cm[m - 1]
-    β = [Index(χ) for _ in 1:m]
+    VLs[m - 1] = (Λ \ VLs[m - 2]) * Cm[m - 1]
+    β = frozen ? [bond(env, d) for d in ds] : [Index(χ) for _ in 1:m]
     for j in 1:m
         d, r = ds[j], reverse(ds[j])
         xdims = namedsize(Cs[j], cuts[j])
@@ -126,11 +149,22 @@ function face_update!(
         pr = prev_dart(emb, r)
         env.edgetensors[d] = peel(Q, corner(env, pr), bond(env, r), bond(env, pr))
     end
-    elt = promote_type(eltype(VR), eltype(VL))
+    elt = promote_type(eltype(VR), eltype(VL), eltype(Λ))
     for j in 1:m
-        cj = j == m - 1 ? Matrix{elt}(Diagonal(λ)) : Matrix{elt}(I, χ, χ)
+        cj = j == m - 1 ? Matrix{elt}(Λ) : Matrix{elt}(I, χ, χ)
         env.corners[ds[j]] = fromarray(cj, (name(β[j]), name(β[mod1(j + 1, m)])), (χ, χ))
-        set!(env.bonds, ds[j], β[j])
+        frozen || set!(env.bonds, ds[j], β[j])
     end
     return env
+end
+
+"""
+    writer_face(emb, d) -> Int
+
+The face whose update is responsible for the tensors on dart `d`: the face to its left, or
+for a dart on the outer face, the inner face on the other side of its edge.
+"""
+function writer_face(emb::PlanarEmbedding, d)
+    f = leftface(emb, d)
+    return iszero(f) ? leftface(emb, reverse(NamedEdge(d))) : f
 end
