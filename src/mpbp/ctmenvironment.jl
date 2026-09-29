@@ -32,6 +32,7 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     embedding_edges = directed_edges(embedding)
     bonds = Dictionary(embedding_edges, [Index(1) for _ in embedding_edges])
     elt = eltype(messages[first(embedding_edges)])
+
     edgetensors = messagecache(embedding_edges) do edge
         return messages[edge] * ones(elt, (bonds[next_edge(embedding, edge)],)) *
             ones(elt, (bonds[prev_edge(embedding, reverse(edge))],))
@@ -39,6 +40,7 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     corners = messagecache(embedding_edges) do edge
         return ones(elt, (bonds[edge], bonds[next_edge(embedding, edge)]))
     end
+
     return CTMEnvironment(embedding, edgetensors, corners, bonds, Dict{Int, Any}())
 end
 
@@ -49,6 +51,7 @@ function environment_tensors(env::CTMEnvironment, vertex; exclude = ())
         NamedEdge(neighbor => vertex)
             for neighbor in neighbors(embedding.graph, vertex) if neighbor ∉ exclude
     ]
+
     return [
         [edgetensor(env, edge) for edge in incoming];
         [
