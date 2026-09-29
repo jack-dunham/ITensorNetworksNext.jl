@@ -157,14 +157,3 @@ function face_update!(
     end
     return env
 end
-
-"""
-    writer_face(emb, d) -> Int
-
-The face whose update is responsible for the tensors on dart `d`: the face to its left, or
-for a dart on the outer face, the inner face on the other side of its edge.
-"""
-function writer_face(emb::PlanarEmbedding, d)
-    f = leftface(emb, d)
-    return iszero(f) ? leftface(emb, reverse(NamedEdge(d))) : f
-end
