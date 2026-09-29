@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary
 using Graphs: edges, neighbors, vertices
-using ITensorBase: Index, NamedTensor, align, names, unnamed
+using ITensorBase: Index
 using NamedGraphs: NamedEdge
 
 struct CTMEnvironment{V, B, E <: MessageCache, C <: MessageCache}
@@ -21,12 +21,6 @@ function Base.copy(env::CTMEnvironment)
         env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
         copy(env.bonds), copy(env.gauges)
     )
-end
-
-fromarray(M, names, dims) = NamedTensor(reshape(M, dims...), names)
-function namedsize(t, ns)
-    rest = setdiff(names(t), ns)
-    return size(unnamed(align(t, (ns..., rest...))))[1:length(ns)]
 end
 
 """
