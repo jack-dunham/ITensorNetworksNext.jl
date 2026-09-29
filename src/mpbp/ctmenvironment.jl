@@ -1,5 +1,5 @@
 using Dictionaries: Dictionary
-using Graphs: edges, neighbors, vertices
+using Graphs: dst, edges, neighbors, vertices
 using ITensorBase: Index
 using NamedGraphs: NamedEdge
 
@@ -41,9 +41,14 @@ function ctm_environment(tn, emb::PlanarEmbedding, messages)
     return CTMEnvironment(emb, edgetensors, corners, bonds, Dict{Int, Any}())
 end
 
-function environment_tensors(env::CTMEnvironment, v)
-    ds = [NamedEdge(w => v) for w in neighbors(env.embedding.graph, v)]
-    return [[edgetensor(env, d) for d in ds]; [corner(env, d) for d in ds]]
+# A corner `c[w => v]` touches `w` and the far end of `next_dart(w => v)`.
+function environment_tensors(env::CTMEnvironment, v; exclude = ())
+    emb = env.embedding
+    ds = [NamedEdge(w => v) for w in neighbors(emb.graph, v) if w ∉ exclude]
+    return [
+        [edgetensor(env, d) for d in ds];
+        [corner(env, d) for d in ds if dst(next_dart(emb, d)) ∉ exclude]
+    ]
 end
 
 function environment_tensors(env::CTMEnvironment, e::Union{AbstractEdge, Pair})
