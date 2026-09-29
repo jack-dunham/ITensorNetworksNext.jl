@@ -9,55 +9,62 @@ struct PlanarEmbedding{V, G <: AbstractGraph}
     leftface::Dictionary{NamedEdge{V}, Int}
 end
 
-function _next_edge(rotation, d)
-    u, v = src(d), dst(d)
-    ws = rotation[v]
-    return NamedEdge(v => ws[mod1(findfirst(==(u), ws) - 1, length(ws))])
+function _next_edge(rotation, edge)
+    source, target = src(edge), dst(edge)
+    around = rotation[target]
+    position = findfirst(==(source), around)
+    return NamedEdge(target => around[mod1(position - 1, length(around))])
 end
 
-function _prev_edge(rotation, d)
-    v, w = src(d), dst(d)
-    ws = rotation[v]
-    return NamedEdge(ws[mod1(findfirst(==(w), ws) + 1, length(ws))] => v)
+function _prev_edge(rotation, edge)
+    source, target = src(edge), dst(edge)
+    around = rotation[source]
+    position = findfirst(==(target), around)
+    return NamedEdge(around[mod1(position + 1, length(around))] => source)
 end
 
 function _signed_area(position, cycle)
-    return sum(cycle) do d
-        (x1, y1), (x2, y2) = position(src(d)), position(dst(d))
+    return sum(cycle) do edge
+        (x1, y1), (x2, y2) = position(src(edge)), position(dst(edge))
         return x1 * y2 - x2 * y1
     end / 2
 end
 
 """
-    planar_embedding(g, position) -> PlanarEmbedding
+    planar_embedding(graph, position) -> PlanarEmbedding
 
-Embed `g` using the straight-line drawing that places vertex `v` at `position(v)`. The drawing
+Embed `graph` using the straight-line drawing that places vertex `v` at `position(v)`. The drawing
 must be connected and have no crossing edges; this is not checked.
 """
-function planar_embedding(g::AbstractGraph, position)
-    V = eltype(vertices(g))
+function planar_embedding(graph::AbstractGraph, position)
+    V = eltype(vertices(graph))
     rotation = Dictionary{V, Vector{V}}()
-    for v in vertices(g)
-        x, y = position(v)
-        ws = collect(neighbors(g, v))
-        sort!(ws; by = w -> atan(position(w)[2] - y, position(w)[1] - x))
-        set!(rotation, v, ws)
+    for vertex in vertices(graph)
+        x, y = position(vertex)
+        around = collect(neighbors(graph, vertex))
+        sort!(
+            around;
+            by = neighbor -> atan(position(neighbor)[2] - y, position(neighbor)[1] - x)
+        )
+        set!(rotation, vertex, around)
     end
     faces = Vector{NamedEdge{V}}[]
     leftface = Dictionary{NamedEdge{V}, Int}()
     nouter = 0
-    for e in edges(g), d in (NamedEdge{V}(e), reverse(NamedEdge{V}(e)))
-        haskey(leftface, d) && continue
-        cycle = [d]
-        while (d′ = _next_edge(rotation, last(cycle))) != d
-            push!(cycle, d′)
+    for undirected in edges(graph),
+            start in (NamedEdge{V}(undirected), reverse(NamedEdge{V}(undirected)))
+
+        haskey(leftface, start) && continue
+        cycle = [start]
+        while (next = _next_edge(rotation, last(cycle))) != start
+            push!(cycle, next)
         end
         if _signed_area(position, cycle) < 0
             nouter += 1
-            foreach(x -> set!(leftface, x, 0), cycle)
+            foreach(edge -> set!(leftface, edge, 0), cycle)
         else
             push!(faces, cycle)
-            foreach(x -> set!(leftface, x, length(faces)), cycle)
+            foreach(edge -> set!(leftface, edge, length(faces)), cycle)
         end
     end
     nouter == 1 || throw(
@@ -65,16 +72,23 @@ function planar_embedding(g::AbstractGraph, position)
             "`position` gives $nouter outer faces; a connected planar drawing has one."
         )
     )
-    return PlanarEmbedding{V, typeof(g)}(g, rotation, faces, leftface)
+    return PlanarEmbedding{V, typeof(graph)}(graph, rotation, faces, leftface)
 end
 
-next_edge(emb::PlanarEmbedding, d) = _next_edge(emb.rotation, NamedEdge(d))
-prev_edge(emb::PlanarEmbedding, d) = _prev_edge(emb.rotation, NamedEdge(d))
-leftface(emb::PlanarEmbedding, d) = emb.leftface[NamedEdge(d)]
-directed_edges(emb::PlanarEmbedding) = collect(keys(emb.leftface))
+function next_edge(embedding::PlanarEmbedding, edge)
+    return _next_edge(embedding.rotation, NamedEdge(edge))
+end
+function prev_edge(embedding::PlanarEmbedding, edge)
+    return _prev_edge(embedding.rotation, NamedEdge(edge))
+end
+leftface(embedding::PlanarEmbedding, edge) = embedding.leftface[NamedEdge(edge)]
+directed_edges(embedding::PlanarEmbedding) = collect(keys(embedding.leftface))
 
 # Coordinates matching NetworkX `hexagonal_lattice_graph`, whose node `(i, j)` is `(j + 1, i + 1)` here.
-function hexagonal_position((j, i))
-    i0, j0 = i - 1, j - 1
-    return (0.5 + i0 + i0 ÷ 2 + (j0 % 2) * ((i0 % 2) - 0.5), √3 * j0 / 2)
+function hexagonal_position((row, column))
+    x_index, y_index = column - 1, row - 1
+    return (
+        0.5 + x_index + x_index ÷ 2 + (y_index % 2) * ((x_index % 2) - 0.5),
+        √3 * y_index / 2,
+    )
 end
