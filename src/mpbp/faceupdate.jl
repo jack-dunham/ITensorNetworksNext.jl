@@ -101,7 +101,9 @@ residual below `tol` on both sides, and throws after `maxiter` iterations otherw
     tol::Float64 = 1.0e-12
     maxiter::Int = 1000
     seed::Int = 0
-    rtol::Float64 = 1.0e-12
+    # An eigenvector this close to rounding changes with the starting blocks, so each call moves the
+    # neighbouring faces.
+    rtol::Float64 = 1.0e-9
     degeneracy_rtol::Float64 = 1.0e-10
 end
 
