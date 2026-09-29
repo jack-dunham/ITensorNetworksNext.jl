@@ -4,7 +4,7 @@ using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: DenseEig, ITensorNetwork, beliefpropagation, bethe_free_entropy,
     contract_network, ctm_environment, ctmrg, darts, expect, face_update!,
     hexagonal_position, invariant_subspace, leftface, linkinds, normnetwork,
-    planar_embedding, tensornetwork, vertex_scalar, vertex_term
+    planar_embedding, tensornetwork, vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using StableRNGs: StableRNG
@@ -34,7 +34,7 @@ const LATTICES = (
         env = ctm_environment(tn, emb, cache)
         @test bethe_free_entropy(tn, env) ≈ bethe_free_entropy(tn, cache) rtol = 1.0e-12
         for v in vertices(g)
-            @test vertex_term(tn, env, v) ≈ vertex_scalar(tn, cache, v) rtol = 1.0e-12
+            @test vertex_scalar(tn, env, v) ≈ vertex_scalar(tn, cache, v) rtol = 1.0e-12
         end
     end
 
