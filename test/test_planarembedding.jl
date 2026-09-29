@@ -1,4 +1,4 @@
-using Graphs: edges, ne, nv, vertices
+using Graphs: edges, ne, nv
 using ITensorNetworksNext:
     darts, hexagonal_position, leftface, next_dart, planar_embedding, prev_dart
 using NamedGraphs: named_grid, named_hexagonal_lattice_graph

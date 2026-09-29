@@ -1,5 +1,5 @@
 using AlgorithmsInterface: AlgorithmsInterface as AI
-using LinearAlgebra: diag
+using LinearAlgebra: diag, norm
 using NamedGraphs: all_edges
 
 default_ctmrg_messages(tn) = Dict(e => ones(Tuple(linkinds(tn, e))) for e in all_edges(tn))
@@ -142,14 +142,21 @@ function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
 end
 
 """
-    ctmrg(tn, emb; maxdim, stopping_criterion = (; maxiter, tol), subspace_algorithm, messages)
+    ctmrg(
+        tn, emb; maxdim, stopping_criterion::NamedTuple = (; maxiter, tol),
+        subspace_algorithm, messages, faces, bp_stopping_criterion
+    )
 
 MP-BP environment of `tn` from eig-CTMRG sweeps over the faces of `emb`, started from the
-converged BP environment. Throws if the change over the last sweep is not below `tol`.
+converged BP environment. `stopping_criterion` is required. `faces` is the sweep order over
+inner-face indices (default `eachindex(emb.faces)`); `bp_stopping_criterion` (default
+`(; maxiter = 100, tol = 1.0e-14)`) controls the initial BP run. Throws if the change over the
+last sweep is not below `tol`.
 """
 function ctmrg(
         tn, emb::PlanarEmbedding; maxdim::Integer, stopping_criterion::NamedTuple,
         subspace_algorithm = nothing, messages = nothing,
+        faces = eachindex(emb.faces),
         bp_stopping_criterion = (; maxiter = 100, tol = 1.0e-14)
     )
     (; maxiter, tol) = stopping_criterion
@@ -161,7 +168,6 @@ function ctmrg(
         subspace_algorithm,
         Tuple{Matrix{Float64}, Int}
     )
-    faces = eachindex(emb.faces)
     subalgorithm = CTMRGSweepAlgorithm(;
         maxdim, subspace_algorithm = alg,
         stopping_criterion = AI.StopAfterIteration(length(faces))
