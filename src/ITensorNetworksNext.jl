@@ -25,6 +25,7 @@ include("beliefpropagation/messagecache.jl")
 include("beliefpropagation/beliefpropagation.jl")
 include("mpbp/ctmenvironment.jl")
 include("mpbp/faceupdate.jl")
+include("mpbp/ctmrg.jl")
 
 include("apply/apply_operators.jl")
 
