@@ -1,7 +1,7 @@
 using Dictionaries: set!
 using Graphs: dst, src
 using ITensorBase: Index, name, names
-using LinearAlgebra: Diagonal, I, eigen, inv, norm, qr
+using LinearAlgebra: Diagonal, I, eigen, inv, norm, ordschur, qr, schur
 using Random: Xoshiro
 using TensorAlgebra: matricize, unmatricize
 
@@ -56,6 +56,19 @@ function kept_count(alg, eigenvalues, maxdim)
     return nkept
 end
 
+# Rows spanning the left invariant subspace of `matrix` for its `nkept` eigenvalues of largest
+# modulus, from an ordered Schur form, so that no eigenvectors of the discarded ones enter.
+function left_invariant_rows(matrix, eigenvalues, nkept)
+    threshold = if nkept < length(eigenvalues)
+        (abs(eigenvalues[nkept]) + abs(eigenvalues[nkept + 1])) / 2
+    else
+        -one(real(eltype(eigenvalues)))
+    end
+    decomposition = schur(Matrix(transpose(matrix)))
+    decomposition = ordschur(decomposition, abs.(decomposition.values) .> threshold)
+    return transpose(decomposition.Z[:, 1:nkept])
+end
+
 """
     invariant_subspace(alg::DenseEig, matrix, maxdim) -> (right_basis, left_basis, eigenvalues)
 
@@ -64,14 +77,15 @@ Dominant invariant subspace of `matrix`: `matrix * right_basis ≈ right_basis *
 Eigenvalues of equal modulus are kept or dropped together.
 """
 function invariant_subspace(alg::DenseEig, matrix, maxdim::Integer)
-    decomposition = eigen(Matrix(matrix))
+    dense = Matrix(matrix)
+    decomposition = eigen(dense)
     order = sortperm(abs.(decomposition.values); rev = true)
     eigenvalues, eigenvectors = decomposition.values[order], decomposition.vectors[:, order]
     nkept = kept_count(alg, eigenvalues, maxdim)
 
-    identity_columns = Matrix{eltype(eigenvectors)}(I, size(eigenvectors, 1), nkept)
-    left_basis = transpose(transpose(eigenvectors) \ identity_columns)
-    return eigenvectors[:, 1:nkept], left_basis, eigenvalues[1:nkept]
+    right_basis = eigenvectors[:, 1:nkept]
+    left_rows = left_invariant_rows(dense, eigenvalues, nkept)
+    return right_basis, (left_rows * right_basis) \ left_rows, eigenvalues[1:nkept]
 end
 
 """
@@ -107,22 +121,25 @@ function invariant_subspace(alg::SubspaceIteration, matrix, maxdim::Integer)
 
         # Rayleigh–Ritz on the pair of blocks.
         overlap = left * right
-        decomposition = eigen(overlap \ (left * right_image))
+        ritz_matrix = overlap \ (left * right_image)
+        decomposition = eigen(ritz_matrix)
         order = sortperm(abs.(decomposition.values); rev = true)
         eigenvalues = decomposition.values[order]
         ritz_vectors = decomposition.vectors[:, order]
         nkept = kept_count(alg, eigenvalues, maxdim)
 
         kept = 1:nkept
-        right_basis = (right * ritz_vectors)[:, kept]
-        left_basis = (ritz_vectors \ (overlap \ left))[kept, :]
+        right_basis = right * ritz_vectors[:, kept]
+        left_rows = left_invariant_rows(ritz_matrix, eigenvalues, nkept)
+        left_transform = (left_rows * (overlap \ left) * right_basis) \ left_rows
+        left_basis = left_transform * (overlap \ left)
         values = Diagonal(eigenvalues[kept])
         scale = abs(first(eigenvalues))
         right_residual =
-            norm((right_image * ritz_vectors)[:, kept] - right_basis * values) /
+            norm(right_image * ritz_vectors[:, kept] - right_basis * values) /
             (scale * norm(right_basis))
         left_residual =
-            norm((ritz_vectors \ (overlap \ left_image))[kept, :] - values * left_basis) /
+            norm(left_transform * (overlap \ left_image) - values * left_basis) /
             (scale * norm(left_basis))
         residual = max(right_residual, left_residual)
         residual < alg.tol && return right_basis, left_basis, eigenvalues[kept]
