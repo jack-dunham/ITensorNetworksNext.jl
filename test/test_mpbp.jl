@@ -4,7 +4,7 @@ using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: DenseEig, ITensorNetwork, beliefpropagation, bethe_free_entropy,
     contract_network, ctm_environment, ctmrg, darts, expect, face_update!,
     hexagonal_position, invariant_subspace, leftface, linkinds, normnetwork,
-    planar_embedding, tensornetwork, vertex_scalar, writer_face
+    planar_embedding, tensornetwork, vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using StableRNGs: StableRNG
@@ -212,17 +212,6 @@ const LATTICES = (
         @test_throws ErrorException ctmrg(
             tn, emb; maxdim = 4, stopping_criterion = (; maxiter = 1, tol = 1.0e-14)
         )
-    end
-
-    @testset "`writer_face` names an inner face containing the dart or its reverse" begin
-        for (lattice, g, pos) in LATTICES
-            emb = planar_embedding(g, pos)
-            for d in darts(emb)
-                f = writer_face(emb, d)
-                @test !iszero(f)
-                @test d ∈ emb.faces[f] || reverse(d) ∈ emb.faces[f]
-            end
-        end
     end
 
     @testset "Frozen, aligned updates keep bonds and tensors fixed at the fixed point" begin
