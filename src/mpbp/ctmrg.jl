@@ -118,7 +118,8 @@ function AI.step!(problem::CTMRGProblem, algorithm::CTMRGAlgorithm, state::CTMRG
     return state
 end
 
-# Relative change in the spectrum of each face's eigenvalue corner `c[d_{m-1}]`.
+# Change in the spectrum of each face's eigenvalue corner `c[d_{m-1}]`, divided by its largest
+# eigenvalue, whose scale drifts between sweeps without changing Z_B.
 function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
     emb = env1.embedding
     return maximum(eachindex(emb.faces); init = 0.0) do f
@@ -137,7 +138,7 @@ function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
         end
         s1, s2 = spectrum(env1), spectrum(env2)
         length(s1) == length(s2) || return Inf
-        return norm(s1 - s2) / norm(s1)
+        return norm(s1 / last(s1) - s2 / last(s2))
     end
 end
 
