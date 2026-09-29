@@ -135,9 +135,10 @@ function AI.initialize_state(
     return IterateUntilConvergedState(; substate, iteration, stopping_criterion_state)
 end
 
+# Accepts any `NestedState`, so a state type that adds fields (e.g. for MPI termination)
+# needs no methods of its own.
 function AI.initialize_state!(
-        problem::AI.Problem, algorithm::IterateUntilConverged,
-        state::IterateUntilConvergedState;
+        problem::AI.Problem, algorithm::IterateUntilConverged, state::NestedState;
         iteration::Int = 0
     )
     state.iteration = iteration
@@ -148,8 +149,7 @@ function AI.initialize_state!(
 end
 
 function initialize_subsolve(
-        problem::AI.Problem, algorithm::IterateUntilConverged,
-        state::IterateUntilConvergedState
+        problem::AI.Problem, algorithm::IterateUntilConverged, state::NestedState
     )
     return problem, algorithm.subalgorithm, state.substate
 end
