@@ -1,6 +1,6 @@
-using Dictionaries: Dictionary, set!
-using Graphs: neighbors
-using ITensorBase: Index, NamedTensor, align, name, names, unnamed
+using Dictionaries: Dictionary
+using Graphs: edges, neighbors, vertices
+using ITensorBase: Index, NamedTensor, align, names, unnamed
 using NamedGraphs: NamedEdge
 
 struct CTMEnvironment{V, B, E <: MessageCache, C <: MessageCache}
