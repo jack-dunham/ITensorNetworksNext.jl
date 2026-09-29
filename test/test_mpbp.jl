@@ -1,12 +1,13 @@
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, NamedTensor, inds, name
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
-using ITensorNetworksNext: DenseEig, ITensorNetwork, beliefpropagation, bethe_free_entropy,
-    contract_network, ctm_environment, ctmrg, expect, face_update!, hexagonal_position,
-    invariant_subspace, leftface, linkinds, normnetwork, planar_embedding, tensornetwork,
-    vertex_scalar
+using ITensorNetworksNext: DenseEig, ITensorNetwork, SubspaceIteration, TransferProduct,
+    beliefpropagation, bethe_free_entropy, contract_network, ctm_environment, ctmrg, expect,
+    face_update!, hexagonal_position, invariant_subspace, leftface, linkinds, normnetwork,
+    planar_embedding, tensornetwork, vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
+using Random: Xoshiro
 using StableRNGs: StableRNG
 using Test: @test, @test_throws, @testset
 
@@ -43,8 +44,10 @@ const LATTICES = (
         B = [3.0 0 0 0; 0 1 -1 0; 0 1 1 0; 0 0 0 0.5]
         S = [1.0 2 0 1; 0 1 3 0; 1 0 1 2; 0 1 0 1]
         Λ = S * B / S
-        for (maxdim, χ) in ((1, 1), (2, 1), (3, 3), (4, 4))
-            VR, VL, λ = invariant_subspace(DenseEig(), Λ, maxdim)
+        for alg in (DenseEig(), SubspaceIteration()),
+                (maxdim, χ) in ((1, 1), (2, 1), (3, 3), (4, 4))
+
+            VR, VL, λ = invariant_subspace(alg, Λ, maxdim)
             @test length(λ) == χ
             @test Λ * VR ≈ VR * Diagonal(λ)
             @test VL * Λ ≈ Diagonal(λ) * VL
@@ -52,6 +55,15 @@ const LATTICES = (
         end
         _, _, λ = invariant_subspace(DenseEig(), Diagonal([1.0, 5.0e-11, 0.0]), 3)
         @test length(λ) == 2
+    end
+
+    @testset "`SubspaceIteration` on a `TransferProduct` matches `DenseEig`" begin
+        A, B = randn(Xoshiro(3), 40, 40), randn(Xoshiro(4), 40, 40)
+        product = TransferProduct([A, B, transpose(A)])
+        VR, VL, λ = invariant_subspace(DenseEig(), product, 5)
+        VR′, VL′, λ′ = invariant_subspace(SubspaceIteration(), product, 5)
+        @test length(λ′) == length(λ)
+        @test VR′ * VL′ ≈ VR * VL rtol = 1.0e-10
     end
 
     function run_sweeps!(env, tn; maxdim, nsweeps)
@@ -121,6 +133,18 @@ const LATTICES = (
         env = ctmrg(tn, emb; maxdim = 1, stopping_criterion = sc)
         @test exp(bethe_free_entropy(tn, env)) ≈ exp(bethe_free_entropy(tn, cache)) rtol =
             1.0e-8
+    end
+
+    @testset "`SubspaceIteration` reaches the `DenseEig` fixed point" begin
+        g = named_grid((4, 4))
+        tn, _ = ising_setup(g, 0.4)
+        emb = planar_embedding(g, v -> v)
+        env = ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)
+        env′ = ctmrg(
+            tn, emb; maxdim = 2, stopping_criterion = sc,
+            subspace_algorithm = SubspaceIteration()
+        )
+        @test bethe_free_entropy(tn, env′) ≈ bethe_free_entropy(tn, env) rtol = 1.0e-12
     end
 
     @testset "Z_B and magnetisation converge to exact ($lattice)" for (lattice, g, pos) in
