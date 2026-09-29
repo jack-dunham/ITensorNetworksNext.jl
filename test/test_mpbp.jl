@@ -1,13 +1,14 @@
-using Graphs: edges, vertices
-using ITensorBase: Index, inds
+using Graphs: dst, edges, src, vertices
+using ITensorBase: Index, NamedTensor, inds, name
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
-using ITensorNetworksNext: DenseEig, beliefpropagation, bethe_free_entropy,
-    contract_network, corner, ctm_environment, darts, edgetensor, face_update!,
-    hexagonal_position, invariant_subspace, leftface, linkinds, planar_embedding,
-    vertex_scalar, vertex_term
-using LinearAlgebra: Diagonal, I, norm
-using NamedGraphs: all_edges, named_grid, named_hexagonal_lattice_graph
-using Test: @test, @testset
+using ITensorNetworksNext: DenseEig, ITensorNetwork, beliefpropagation, bethe_free_entropy,
+    contract_network, corner, ctm_environment, ctmrg, darts, edgetensor, expect,
+    face_update!, hexagonal_position, invariant_subspace, leftface, linkinds,
+    message_environment, normnetwork, planar_embedding, tensornetwork, vertex_scalar,
+    vertex_term
+using LinearAlgebra: Diagonal, I, inv, norm
+using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
+using Test: @test, @test_throws, @testset
 
 function ising_setup(g, β; h = 0.1, sz_vertices = [])
     ldict = Dict(e => Index(2) for e in edges(g))
@@ -101,5 +102,105 @@ const LATTICES = (
             end
             @test change(1.0e-3) / change(1.0e-4) > 50
         end
+    end
+
+    sc = (; maxiter = 100, tol = 1.0e-12)
+
+    @testset "χ = 1 fixed point is the BP fixed point ($lattice)" for (lattice, g, pos) in
+        LATTICES
+
+        tn, _ = ising_setup(g, 0.4)
+        emb = planar_embedding(g, pos)
+        cache = beliefpropagation(
+            tn, bp_messages(tn, g);
+            stopping_criterion = (; maxiter = 100, tol = 1.0e-14)
+        )
+        env = ctmrg(tn, emb; maxdim = 1, stopping_criterion = sc)
+        @test exp(bethe_free_entropy(tn, env)) ≈ exp(bethe_free_entropy(tn, cache)) rtol =
+            1.0e-8
+    end
+
+    @testset "Z_B and magnetisation converge to exact ($lattice)" for (lattice, g, pos) in
+        LATTICES
+
+        β = 0.4
+        tn, l = ising_setup(g, β)
+        emb = planar_embedding(g, pos)
+        z = contract_network(tn)[]
+        err(χ) = abs(
+            exp(
+                bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = χ, stopping_criterion = sc))
+            ) / z - 1
+        )
+        @test err(2) > err(4)
+        env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
+        @test exp(bethe_free_entropy(tn, env)) ≈ z rtol = 1.0e-10
+        v = first(vertices(g))
+        tn_sz = ising_network(l, β, g; h = 0.1, sz_vertices = [v])
+        @test expect(tn, env, v, tn_sz[v]) ≈ contract_network(tn_sz)[] / z rtol = 1.0e-10
+    end
+
+    @testset "Z_B is invariant under link gauge transformations" begin
+        g = named_grid((4, 4))
+        tn, _ = ising_setup(g, 0.4)
+        emb = planar_embedding(g, v -> v)
+        z = exp(bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)))
+        tn_g = ITensorNetwork(Dict(v => tn[v] for v in vertices(tn)))
+        for e in edges(g)
+            i = only(linkinds(tn, e))
+            j = Index(length(i))
+            G = randn(length(i), length(i)) + 3I
+            tn_g[src(e)] = tn_g[src(e)] * NamedTensor(G, (name(i), name(j)))
+            tn_g[dst(e)] = tn_g[dst(e)] * NamedTensor(inv(G), (name(j), name(i)))
+        end
+        z_g = exp(
+            bethe_free_entropy(tn_g, ctmrg(tn_g, emb; maxdim = 2, stopping_criterion = sc))
+        )
+        @test z_g ≈ z rtol = 1.0e-10
+    end
+
+    @testset "`NormNetwork` of a random state" begin
+        g = named_grid((3, 3))
+        l = Dict(e => Index(2) for e in edges(g))
+        l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+        s = Dict(v => Index(2) for v in vertices(g))
+        ψ = tensornetwork(vertices(g)) do v
+            return randn((s[v], map(e -> l[e], incident_edges(g, v))...))
+        end
+        nn = normnetwork(ψ)
+        emb = planar_embedding(g, v -> v)
+        env = ctmrg(
+            nn, emb; maxdim = 8, stopping_criterion = sc,
+            messages = message_environment(one, nn)
+        )
+        @test exp(bethe_free_entropy(nn, env)) ≈ contract_network(nn)[] rtol = 1.0e-10
+    end
+
+    @testset "Complex element type" begin
+        g = named_grid((3, 3))
+        tn, _ = ising_setup(g, 0.4 + 0im)
+        emb = planar_embedding(g, v -> v)
+        env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
+        @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-10
+    end
+
+    @testset "`maxdim` above the available rank" begin
+        g = named_hexagonal_lattice_graph(2, 2)
+        tn, _ = ising_setup(g, 0.4)
+        emb = planar_embedding(g, hexagonal_position)
+        z_b = exp(
+            bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = 64, stopping_criterion = sc))
+        )
+        @test isfinite(z_b)
+        @test z_b ≈ contract_network(tn)[] rtol = 1.0e-10
+    end
+
+    @testset "Unconverged run throws" begin
+        g = named_grid((4, 4))
+        tn, _ = ising_setup(g, 0.4)
+        emb = planar_embedding(g, v -> v)
+        @test_throws ErrorException ctmrg(
+            tn, emb; maxdim = 4, stopping_criterion = (; maxiter = 1, tol = 1.0e-14)
+        )
     end
 end
