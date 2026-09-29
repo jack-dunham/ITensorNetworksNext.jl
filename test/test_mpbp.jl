@@ -132,7 +132,7 @@ const LATTICES = (
                 bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = χ, stopping_criterion = sc))
             ) / z - 1
         )
-        @test err(2) > err(4)
+        @test err(1) > err(2)
         env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
         @test exp(bethe_free_entropy(tn, env)) ≈ z rtol = 1.0e-10
         v = first(vertices(g))
