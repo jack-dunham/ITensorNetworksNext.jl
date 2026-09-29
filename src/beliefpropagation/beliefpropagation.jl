@@ -301,6 +301,29 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNet
     return normnetwork_message_update!(algorithm, cache, factors, edge)
 end
 
+"""
+    BlockedMessageUpdate(; normalize = true, blocksize = nothing, workspace_limit = nothing,
+                           backend = nothing, allocator = nothing)
+
+Message update for a `NormNetwork` that contracts each message in blocks of `blocksize` columns of
+its outgoing ket leg, bounding the size of every intermediate. Requires TensorOperations to be
+loaded. `blocksize = nothing` uses the whole leg; `backend` and `allocator` are passed to
+`TensorOperations.tensorcontract!`, and `nothing` selects TensorOperations' defaults.
+`workspace_limit` is reserved and must be `nothing`.
+"""
+@kwdef struct BlockedMessageUpdate{Blocksize, WorkspaceLimit, Backend, Allocator} <:
+    MessageUpdateAlgorithm
+    normalize::Bool = true
+    blocksize::Blocksize = nothing
+    workspace_limit::WorkspaceLimit = nothing
+    backend::Backend = nothing
+    allocator::Allocator = nothing
+end
+
+function message_update!(algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge)
+    return normnetwork_message_update!(algorithm, cache, factors, edge)
+end
+
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===
 
 function AIE.iterate_diff(cache1::MessageCache, cache2::MessageCache)
