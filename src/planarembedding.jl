@@ -89,7 +89,6 @@ function prev_edge(embedding::PlanarEmbedding, edge)
     return _prev_edge(embedding.rotation, NamedEdge(edge))
 end
 leftface(embedding::PlanarEmbedding, edge) = embedding.leftface[NamedEdge(edge)]
-directed_edges(embedding::PlanarEmbedding) = collect(keys(embedding.leftface))
 
 # Coordinates matching NetworkX `hexagonal_lattice_graph`, whose node `(i, j)` is `(j + 1, i + 1)` here.
 function hexagonal_position((row, column))

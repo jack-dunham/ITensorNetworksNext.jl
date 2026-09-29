@@ -2,9 +2,9 @@ using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, NamedTensor, inds, name
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: DenseEig, ITensorNetwork, beliefpropagation, bethe_free_entropy,
-    contract_network, ctm_environment, ctmrg, directed_edges, expect, face_update!,
-    hexagonal_position, invariant_subspace, leftface, linkinds, normnetwork,
-    planar_embedding, tensornetwork, vertex_scalar
+    contract_network, ctm_environment, ctmrg, expect, face_update!, hexagonal_position,
+    invariant_subspace, leftface, linkinds, normnetwork, planar_embedding, tensornetwork,
+    vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using StableRNGs: StableRNG
@@ -86,9 +86,9 @@ const LATTICES = (
         logz = bethe_free_entropy(tn, env)
         rng = StableRNG(1)
         d = first(
-            filter(
+            Iterators.filter(
                 d -> all(!iszero, (leftface(emb, d), leftface(emb, reverse(d)))),
-                directed_edges(emb)
+                all_edges(g)
             )
         )
         # A single edge tensor leaves log Z_B unchanged at the fixed point, so the pair on
@@ -223,7 +223,7 @@ const LATTICES = (
         bonds = copy(env.bonds)
         change(e1, e0) = maximum(
             norm(e1.edgetensors[d] - e0.edgetensors[d]) / norm(e0.edgetensors[d]) for
-                d in directed_edges(emb)
+                d in all_edges(g)
         )
         previous = env
         for _ in 1:20
@@ -240,7 +240,7 @@ const LATTICES = (
                 )
             end
         end
-        @test all(env.bonds[d] === bonds[d] for d in directed_edges(emb))
+        @test all(env.bonds[d] === bonds[d] for d in all_edges(g))
         @test change(env, previous) < 1.0e-8
         @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-12
     end

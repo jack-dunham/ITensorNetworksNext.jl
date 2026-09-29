@@ -1,7 +1,7 @@
 using Graphs: edges, ne, nv
 using ITensorNetworksNext:
-    directed_edges, hexagonal_position, leftface, next_edge, planar_embedding, prev_edge
-using NamedGraphs: named_grid, named_hexagonal_lattice_graph
+    hexagonal_position, leftface, next_edge, planar_embedding, prev_edge
+using NamedGraphs: all_edges, named_grid, named_hexagonal_lattice_graph
 using Test: @test, @test_throws, @testset
 
 @testset "PlanarEmbedding" begin
@@ -13,8 +13,8 @@ using Test: @test, @test_throws, @testset
         @test length(emb.faces) == nfaces
         @test all(f -> length(f) == facelength, emb.faces)
         @test nv(g) - ne(g) + length(emb.faces) == 1
-        @test length(directed_edges(emb)) == 2 * ne(g)
-        for d in directed_edges(emb)
+        @test length(emb.leftface) == 2 * ne(g)
+        for d in all_edges(g)
             @test prev_edge(emb, next_edge(emb, d)) == d
             @test leftface(emb, next_edge(emb, d)) == leftface(emb, d)
         end
