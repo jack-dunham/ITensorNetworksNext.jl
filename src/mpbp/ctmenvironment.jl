@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
 using ITensorBase: Index
-using NamedGraphs: NamedEdge
+using NamedGraphs: NamedEdge, all_edges
 
 struct CTMEnvironment{V, B, E <: MessageCache, C <: MessageCache}
     embedding::PlanarEmbedding{V}
@@ -29,7 +29,7 @@ end
 The χ = 1 environment whose edge tensors are the BP `messages` and whose corners are all 1.
 """
 function ctm_environment(tn, embedding::PlanarEmbedding, messages)
-    embedding_edges = directed_edges(embedding)
+    embedding_edges = collect(all_edges(embedding.graph))
     bonds = Dictionary(embedding_edges, [Index(1) for _ in embedding_edges])
     elt = eltype(messages[first(embedding_edges)])
 
