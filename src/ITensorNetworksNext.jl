@@ -24,6 +24,7 @@ include("contract_network.jl")
 include("beliefpropagation/messagecache.jl")
 include("beliefpropagation/beliefpropagation.jl")
 include("beliefpropagation/blockedmessageupdate.jl")
+include("mpbp/ctmenvironment.jl")
 
 include("apply/apply_operators.jl")
 
