@@ -43,26 +43,30 @@ end
 
 cut_names(tn, env::CTMEnvironment, d) = (linknames(tn, d)..., name(bond(env, reverse(d))))
 
+# Contracts the tensors at `v = src(ds[i])` outside face `f`: the edge tensors not on the face and
+# the corners whose wedge touches no face edge.
 function corner_transfer_matrix(tn, env::CTMEnvironment, f::Int, i::Int)
     emb = env.embedding
     ds = emb.faces[f]
-    m = length(ds)
-    dprev, dnext = ds[mod1(i - 1, m)], ds[i]
+    dprev, dnext = ds[mod1(i - 1, length(ds))], ds[i]
     v = src(dnext)
-    a, b = src(dprev), dst(dnext)
-    ts = Any[tn[v]]
-    for w in neighbors(emb.graph, v)
-        d = NamedEdge(w => v)
-        w ∈ (a, b) || push!(ts, edgetensor(env, d))
-        w ∉ (a, b) && dst(next_dart(emb, d)) ∉ (a, b) && push!(ts, corner(env, d))
-    end
+    onface(w) = w ∈ (src(dprev), dst(dnext))
+    ws = neighbors(emb.graph, v)
+    ts = [
+        [tn[v]];
+        [edgetensor(env, w => v) for w in ws if !onface(w)];
+        [
+            corner(env, w => v) for w in ws
+                if !onface(w) && !onface(dst(next_dart(emb, w => v)))
+        ]
+    ]
     C = contract_network(ts)
-    elt = eltype(C)
+    # A cut bond that no included tensor carries has dimension 1 and is attached as a unit leg.
     for r in (reverse(dprev), reverse(dnext))
         β = bond(env, r)
         if name(β) ∉ names(C)
             @assert length(β) == 1
-            C = C * ones(elt, (β,))
+            C = C * ones(eltype(C), (β,))
         end
     end
     @assert issetequal(
@@ -72,17 +76,20 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, f::Int, i::Int)
     return C
 end
 
-# `X` equals `A` contracted with corner `c` over `k`; returns `A`, whose leg `s` becomes `k`.
-function peel(X, c, s, k)
-    M = matricize(c, (name(k),), (name(s),))
-    return X * fromarray(inv(M), (name(s), name(k)), (length(s), length(k)))
+# `X` equals `A` contracted with corner `c` over the one leg they share; returns `A`.
+function peel(X, c)
+    s = only(intersect(names(X), names(c)))
+    k = only(setdiff(names(c), (s,)))
+    M = matricize(c, (k,), (s,))
+    return X * fromarray(inv(M), (s, k), namedsize(c, (s, k)))
 end
 
 """
     face_update!(env, tn, f; maxdim, alg, frozen = false, align = false) -> env
 
 Replace the corners, bonds and edge tensors of face `f` with the MP-BP solution of the face
-given the rest of `env`.
+given the rest of `env`. Every corner of `f` is set to the identity except the one on its
+second-to-last dart, which holds the eigenvalues of the face's corner transfer matrix product.
 
 With `frozen = true` the face keeps its bond indices, so the kept subspace must have their
 dimension. With `align = true` the new subspace basis is rotated onto the one the previous
@@ -98,62 +105,90 @@ function face_update!(
         frozen::Bool = false,
         align::Bool = false
     )
-    emb = env.embedding
-    ds = emb.faces[f]
+    ds = env.embedding.faces[f]
     m = length(ds)
     m ≥ 3 || throw(ArgumentError("Face $f has $m darts; `face_update!` needs at least 3."))
     cuts = [cut_names(tn, env, d) for d in ds]
     Cs = [corner_transfer_matrix(tn, env, f, i) for i in 1:m]
-    Cm = [matricize(Cs[i] / norm(Cs[i]), cuts[mod1(i - 1, m)], cuts[i]) for i in 1:m]
-    χfrozen = length(bond(env, first(ds)))
-    VR, VL, λ = invariant_subspace(alg, foldl(*, Cm), frozen ? χfrozen : maxdim)
-    χ = length(λ)
-    frozen && χ != χfrozen &&
-        throw(
-        ArgumentError(
-            "Face $f keeps $χ eigenvalues but its frozen bonds have dimension $χfrozen."
-        )
+    Cm = [
+        matricize(C / norm(C), cutprev, cut)
+            for (C, cutprev, cut) in zip(Cs, circshift(cuts, 1), cuts)
+    ]
+    VR, VL, Λ = face_subspace(env, f, Cm; maxdim, alg, frozen, align)
+    VRs, VLs = propagate_bases(Cm, VR, VL, Λ)
+    β = frozen ? [bond(env, d) for d in ds] : [Index(size(Λ, 1)) for _ in ds]
+    set_edgetensors!(
+        env,
+        ds,
+        [namedsize(C, cut) for (C, cut) in zip(Cs, cuts)],
+        cuts,
+        VRs,
+        VLs,
+        β
     )
-    Λ = Matrix(Diagonal(λ))
-    if align
-        reference = get(env.gauges, f, nothing)
-        if !isnothing(reference) && size(reference) == size(VR)
-            g = VL * reference
-            VR, VL, Λ = VR * g, g \ VL, g \ (Λ * g)
-        end
-        env.gauges[f] = VR
+    set_corners!(env, ds, Λ, β; frozen)
+    return env
+end
+
+# Dominant subspace of the product of `Cm`, rotated onto the previous basis of `f` if `align`.
+function face_subspace(env::CTMEnvironment, f::Int, Cm; maxdim, alg, frozen, align)
+    χfrozen = length(bond(env, first(env.embedding.faces[f])))
+    VR, VL, λ = invariant_subspace(alg, foldl(*, Cm), frozen ? χfrozen : maxdim)
+    if frozen && length(λ) != χfrozen
+        throw(
+            ArgumentError(
+                "Face $f keeps $(length(λ)) eigenvalues but its frozen bonds have dimension $χfrozen."
+            )
+        )
     end
+    Λ = Matrix(Diagonal(λ))
+    align || return VR, VL, Λ
+    reference = get(env.gauges, f, nothing)
+    if !isnothing(reference) && size(reference) == size(VR)
+        g = VL * reference
+        VR, VL, Λ = VR * g, g \ VL, g \ (Λ * g)
+    end
+    env.gauges[f] = VR
+    return VR, VL, Λ
+end
+
+# Carries the bases at dart `m` around the face; `Λ` is divided out at dart `m - 1`, whose
+# corner holds it.
+function propagate_bases(Cm, VR, VL, Λ)
+    m = length(Cm)
     VRs = Vector{Matrix{eltype(VR)}}(undef, m)
     VLs = Vector{Matrix{eltype(VL)}}(undef, m)
     VRs[m], VLs[m] = VR, VL
     for j in m:-1:2
         VRs[j - 1] = Cm[j] * VRs[j]
     end
-    VLs[1] = VLs[m] * Cm[1]
-    for j in 2:(m - 2)
-        VLs[j] = VLs[j - 1] * Cm[j]
+    for j in 1:(m - 1)
+        prev = VLs[mod1(j - 1, m)]
+        VLs[j] = (j == m - 1 ? Λ \ prev : prev) * Cm[j]
     end
-    VLs[m - 1] = (Λ \ VLs[m - 2]) * Cm[m - 1]
-    β = frozen ? [bond(env, d) for d in ds] : [Index(χ) for _ in 1:m]
-    for j in 1:m
-        d, r = ds[j], reverse(ds[j])
-        xdims = namedsize(Cs[j], cuts[j])
-        P = fromarray(VRs[j], (cuts[j]..., name(β[mod1(j - 1, m)])), (xdims..., χ))
-        Q = fromarray(
-            transpose(VLs[j]),
-            (cuts[j]..., name(β[mod1(j + 1, m)])),
-            (xdims..., χ)
-        )
-        env.edgetensors[r] =
-            peel(P, corner(env, r), bond(env, r), bond(env, next_dart(emb, r)))
-        pr = prev_dart(emb, r)
-        env.edgetensors[d] = peel(Q, corner(env, pr), bond(env, r), bond(env, pr))
+    return VRs, VLs
+end
+
+# Writes the edge tensors on both sides of each dart of the face.
+function set_edgetensors!(env::CTMEnvironment, ds, cutdims, cuts, VRs, VLs, β)
+    emb = env.embedding
+    χ = length(first(β))
+    for (j, (d, βprev, βnext)) in enumerate(zip(ds, circshift(β, 1), circshift(β, -1)))
+        r = reverse(d)
+        slice(M, b) = fromarray(M, (cuts[j]..., name(b)), (cutdims[j]..., χ))
+        env.edgetensors[r] = peel(slice(VRs[j], βprev), corner(env, r))
+        env.edgetensors[d] =
+            peel(slice(transpose(VLs[j]), βnext), corner(env, prev_dart(emb, r)))
     end
-    elt = promote_type(eltype(VR), eltype(VL), eltype(Λ))
-    for j in 1:m
-        cj = j == m - 1 ? Matrix{elt}(Λ) : Matrix{elt}(I, χ, χ)
-        env.corners[ds[j]] = fromarray(cj, (name(β[j]), name(β[mod1(j + 1, m)])), (χ, χ))
-        frozen || set!(env.bonds, ds[j], β[j])
+    return env
+end
+
+function set_corners!(env::CTMEnvironment, ds, Λ, β; frozen)
+    χ = size(Λ, 1)
+    for (j, (d, b, bnext)) in enumerate(zip(ds, β, circshift(β, -1)))
+        cj = j == length(ds) - 1 ? Λ : Matrix{eltype(Λ)}(I, χ, χ)
+        env.corners[d] = fromarray(cj, (name(b), name(bnext)), (χ, χ))
+        frozen || set!(env.bonds, d, b)
     end
     return env
 end
