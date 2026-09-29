@@ -63,6 +63,7 @@ function ctmrg(
     messages = isnothing(messages) ? default_ctmrg_messages(tn) : messages
     cache = beliefpropagation(tn, messages; stopping_criterion = bp_stopping_criterion)
     env = ctm_environment(tn, embedding, cache)
+
     alg = select_algorithm(
         invariant_subspace,
         subspace_algorithm,
@@ -76,9 +77,11 @@ function ctmrg(
         subalgorithm = sweep,
         stopping_criterion = AI.StopAfterIteration(maxiter) | StopWhenConverged(; tol)
     )
+
     problem = CTMRGProblem(tn)
     state = AI.initialize_state(problem, algorithm; iterate = env)
     AI.solve!(problem, algorithm, state)
+
     convergence = last(state.stopping_criterion_state.criteria_states)
     convergence.at_iteration ≥ 0 || error(
         "`ctmrg` stopped after $(state.iteration) sweeps with `iterate_diff` = " *
