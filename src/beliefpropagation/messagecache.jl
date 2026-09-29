@@ -142,9 +142,18 @@ function incident_subgraph(graph::AbstractGraph, vertices)
     return edge_subgraph(graph, edges)
 end
 
-function vertex_scalar(factors, messages, vertex; kwargs...)
-    in_messages = incoming_edge_data(messages, [vertex])
-    tensors = [factor_tensors(factors, vertex); collect(in_messages)]
+# A vertex is anything that is not an edge or a `Pair`.
+function environment_tensors(messages::MessageCache, vertex)
+    return collect(incoming_edge_data(messages, [vertex]))
+end
+function environment_tensors(messages::MessageCache, edge::Union{AbstractEdge, Pair})
+    return [messages[edge], messages[reverse(edge)]]
+end
+
+# `tensor`, when given, stands in for the factor tensors at `vertex`.
+function vertex_scalar(factors, env, vertex; tensor = nothing, kwargs...)
+    vertex_tensors = isnothing(tensor) ? factor_tensors(factors, vertex) : [tensor]
+    tensors = [vertex_tensors; environment_tensors(env, vertex)]
     return prod_tensors(tensors, contraction_tree(tensors; kwargs...))[]
 end
 
@@ -159,7 +168,8 @@ function vertex_scalars(factors, messages, vertices)
 end
 
 # Takes factors as an unused argument for consistency with `vertex_scalar`.
-edge_scalar(_factors, messages, edge) = (messages[edge] * messages[reverse(edge)])[]
+edge_scalar(_factors, env, edge) = contract_network(environment_tensors(env, edge))[]
+face_scalar(_factors, env, face) = contract_network(environment_tensors(env, face))[]
 edge_scalars(factors, messages) = edge_scalars(factors, messages, edges(factors))
 function edge_scalars(factors, messages, edges)
     return narrow_map(e -> edge_scalar(factors, messages, e), edges)
@@ -185,18 +195,26 @@ function sumlog(terms)
     return s isa Real && s > 0 ? d : d + log(complex(s))
 end
 
+# Returns a tuple of numerator term collections and the denominator terms.
+function kikuchi_terms(factors, messages)
+    return (vertex_scalars(factors, messages),), edge_scalars(factors, messages)
+end
+
 # We need a graph structure here, so assume `factors` is a graph.
-function bethe_free_entropy(factors, messages)
-    numerator_terms = vertex_scalars(factors, messages)
-    denominator_terms = edge_scalars(factors, messages)
+function bethe_free_entropy(factors, env)
+    numerator_terms, denominator_terms = kikuchi_terms(factors, env)
 
     if any(iszero, denominator_terms)
         return -Inf
     end
 
-    return sumlog(numerator_terms) - sumlog(denominator_terms)
+    return sum(sumlog, numerator_terms) - sumlog(denominator_terms)
 end
 bethe_free_energy(factors, messages) = -bethe_free_entropy(factors, messages)
+
+function expect(factors, env, vertex, tensor)
+    return vertex_scalar(factors, env, vertex; tensor) / vertex_scalar(factors, env, vertex)
+end
 
 # ===================================== NormNetwork ====================================== #
 
