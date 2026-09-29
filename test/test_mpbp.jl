@@ -197,6 +197,14 @@ const LATTICES = (
         @test z_b ≈ contract_network(tn)[] rtol = 1.0e-10
     end
 
+    @testset "Converges at the critical coupling on a 6×6 grid" begin
+        g = named_grid((6, 6))
+        tn, _ = ising_setup(g, log(1 + √2) / 2; h = 0.0)
+        emb = planar_embedding(g, v -> v)
+        env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
+        @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-12
+    end
+
     @testset "Unconverged run throws" begin
         g = named_grid((4, 4))
         tn, _ = ising_setup(g, 0.4)
