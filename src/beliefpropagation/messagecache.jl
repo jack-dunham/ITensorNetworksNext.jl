@@ -1,11 +1,11 @@
 using DataGraphs: DataGraphs, AbstractDataGraph, AbstractEdgeDataGraph, edge_data,
     edge_data_type, set_vertex_data!, underlying_graph, underlying_graph_type, vertex_data,
     vertex_data_type
-using Dictionaries: Dictionary, getindices, set!, unset!
+using Dictionaries: Dictionary, set!, unset!
 using Graphs: AbstractGraph, connected_components, is_directed, is_tree
 using ITensorBase: state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
-    boundary_edges, edge_subgraph, in_incident_edges, incident_edges, to_graph_index,
+    edge_subgraph, in_incident_edges, incident_edges, to_graph_index,
     vertextype
 using SplitApplyCombine: mapmany
 
@@ -121,14 +121,13 @@ function incoming_messages(cache::AbstractGraph, pair::Pair)
     return incoming_messages(cache, edge)
 end
 function incoming_messages(cache::AbstractGraph, edge::AbstractEdge)
-    in_edges = Indices(in_incident_edges(cache, src(edge)))
-    return getindices(cache, filter(e -> e != reverse(edge), in_edges))
+    return environment_tensors(cache, src(edge); exclude = (dst(edge),))
 end
 
-# TODO: maybe this should be defined in `DataGraphs`.
-function incoming_edge_data(cache::AbstractGraph, vertices)
-    in_edges = Indices(boundary_edges(cache, vertices; dir = :in))
-    return getindices(cache, in_edges)
+# A vertex is anything that is not an edge or a `Pair`. `exclude` drops the tensors that touch
+# the listed neighbours of `vertex`.
+function environment_tensors(messages::AbstractGraph, vertex; exclude = ())
+    return [messages[e] for e in in_incident_edges(messages, vertex) if src(e) ∉ exclude]
 end
 
 """
@@ -142,11 +141,7 @@ function incident_subgraph(graph::AbstractGraph, vertices)
     return edge_subgraph(graph, edges)
 end
 
-# A vertex is anything that is not an edge or a `Pair`.
-function environment_tensors(messages::MessageCache, vertex)
-    return collect(incoming_edge_data(messages, [vertex]))
-end
-function environment_tensors(messages::MessageCache, edge::Union{AbstractEdge, Pair})
+function environment_tensors(messages::AbstractGraph, edge::Union{AbstractEdge, Pair})
     return [messages[edge], messages[reverse(edge)]]
 end
 
