@@ -3,7 +3,7 @@ using Graphs: dst, neighbors, src
 using ITensorBase: Index, name, names
 using LinearAlgebra: Diagonal, I, eigen, inv, norm
 using NamedGraphs: NamedEdge
-using TensorAlgebra: matricize
+using TensorAlgebra: matricize, unmatricize
 
 @kwdef struct DenseEig <: AbstractAlgorithm
     rtol::Float64 = 1.0e-12
@@ -41,7 +41,7 @@ function invariant_subspace(alg::DenseEig, Λ::AbstractMatrix, maxdim::Integer)
     return vecs[:, 1:χ], VL, vals[1:χ]
 end
 
-cut_names(tn, env::CTMEnvironment, d) = (linknames(tn, d)..., name(bond(env, reverse(d))))
+cut_inds(tn, env::CTMEnvironment, d) = (linkinds(tn, d)..., bond(env, reverse(d)))
 
 function corner_transfer_matrix(tn, env::CTMEnvironment, f::Int, i::Int)
     emb = env.embedding
@@ -67,15 +67,14 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, f::Int, i::Int)
     end
     @assert issetequal(
         names(C),
-        (cut_names(tn, env, dprev)..., cut_names(tn, env, dnext)...)
+        name.((cut_inds(tn, env, dprev)..., cut_inds(tn, env, dnext)...))
     )
     return C
 end
 
 # `X` equals `A` contracted with corner `c` over `k`; returns `A`, whose leg `s` becomes `k`.
 function peel(X, c, s, k)
-    M = matricize(c, (name(k),), (name(s),))
-    return X * fromarray(inv(M), (name(s), name(k)), (length(s), length(k)))
+    return X * unmatricize(inv(matricize(c, (k,), (s,))), (s,), (k,))
 end
 
 """
@@ -102,7 +101,7 @@ function face_update!(
     ds = emb.faces[f]
     m = length(ds)
     m ≥ 3 || throw(ArgumentError("Face $f has $m darts; `face_update!` needs at least 3."))
-    cuts = [cut_names(tn, env, d) for d in ds]
+    cuts = [cut_inds(tn, env, d) for d in ds]
     Cs = [corner_transfer_matrix(tn, env, f, i) for i in 1:m]
     Cm = [matricize(Cs[i] / norm(Cs[i]), cuts[mod1(i - 1, m)], cuts[i]) for i in 1:m]
     χfrozen = length(bond(env, first(ds)))
@@ -137,13 +136,8 @@ function face_update!(
     β = frozen ? [bond(env, d) for d in ds] : [Index(χ) for _ in 1:m]
     for j in 1:m
         d, r = ds[j], reverse(ds[j])
-        xdims = namedsize(Cs[j], cuts[j])
-        P = fromarray(VRs[j], (cuts[j]..., name(β[mod1(j - 1, m)])), (xdims..., χ))
-        Q = fromarray(
-            transpose(VLs[j]),
-            (cuts[j]..., name(β[mod1(j + 1, m)])),
-            (xdims..., χ)
-        )
+        P = unmatricize(VRs[j], cuts[j], (β[mod1(j - 1, m)],))
+        Q = unmatricize(transpose(VLs[j]), cuts[j], (β[mod1(j + 1, m)],))
         env.edgetensors[r] =
             peel(P, corner(env, r), bond(env, r), bond(env, next_dart(emb, r)))
         pr = prev_dart(emb, r)
@@ -152,7 +146,7 @@ function face_update!(
     elt = promote_type(eltype(VR), eltype(VL), eltype(Λ))
     for j in 1:m
         cj = j == m - 1 ? Matrix{elt}(Λ) : Matrix{elt}(I, χ, χ)
-        env.corners[ds[j]] = fromarray(cj, (name(β[j]), name(β[mod1(j + 1, m)])), (χ, χ))
+        env.corners[ds[j]] = unmatricize(cj, (β[j],), (β[mod1(j + 1, m)],))
         frozen || set!(env.bonds, ds[j], β[j])
     end
     return env
