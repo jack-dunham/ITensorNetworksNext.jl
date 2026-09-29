@@ -1,8 +1,7 @@
 using Dictionaries: set!
-using Graphs: dst, neighbors, src
+using Graphs: dst, src
 using ITensorBase: Index, name, names
 using LinearAlgebra: Diagonal, I, eigen, inv, norm
-using NamedGraphs: NamedEdge
 using TensorAlgebra: matricize, unmatricize
 
 @kwdef struct DenseEig <: AbstractAlgorithm
@@ -50,13 +49,7 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, f::Int, i::Int)
     dprev, dnext = ds[mod1(i - 1, m)], ds[i]
     v = src(dnext)
     a, b = src(dprev), dst(dnext)
-    ts = Any[tn[v]]
-    for w in neighbors(emb.graph, v)
-        d = NamedEdge(w => v)
-        w ∈ (a, b) || push!(ts, edgetensor(env, d))
-        w ∉ (a, b) && dst(next_dart(emb, d)) ∉ (a, b) && push!(ts, corner(env, d))
-    end
-    C = contract_network(ts)
+    C = contract_network([[tn[v]]; environment_tensors(env, v; exclude = (a, b))])
     elt = eltype(C)
     for r in (reverse(dprev), reverse(dnext))
         β = bond(env, r)
