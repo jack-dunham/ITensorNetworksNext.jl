@@ -4,7 +4,7 @@ using ITensorNetworksNext.AlgorithmsInterfaceExtensions:
 using Test: @test, @test_throws, @testset
 
 # Concrete `NestedAlgorithm` subtype: holds a flat list of child algorithms
-# and picks them by iteration index. Mirrors how `BeliefPropagationAlgorithm`
+# and picks them by iteration index. Mirrors how `IterateUntilConverged`
 # shapes itself on top of the minimal `AIE.NestedAlgorithm`.
 struct TestProblem <: AI.Problem end
 
@@ -104,6 +104,17 @@ function AIE.initialize_subsolve(
     return subproblem, subalgorithm, substate
 end
 
+struct AddEntry end
+AIE.update!(::AddEntry, iterate, ::TestProblem, entry) = (iterate .+= entry; iterate)
+
+# A `NestedState` with an extra field and no methods of its own.
+@kwdef mutable struct ExtraFieldState{Substate, SCState} <: AIE.NestedState
+    substate::Substate
+    iteration::Int = 0
+    stopping_criterion_state::SCState
+    extra::Int = 7
+end
+
 @testset "AlgorithmsInterfaceExtensions" begin
     @testset "NestedAlgorithm defaults" begin
         # The bare `initialize_subsolve` default throws a `MethodError`,
@@ -136,5 +147,25 @@ end
         # `state.iterate .+= 1` calls.
         @test state.iteration == 2
         @test state.iterate ≈ [3.0, 3.0]
+    end
+
+    @testset "IterateUntilConverged over a SweepAlgorithm with a custom NestedState" begin
+        problem = TestProblem()
+        algorithm = AIE.IterateUntilConverged(;
+            subalgorithm = AIE.SweepAlgorithm(;
+                schedule = [1.0, 2.0, 3.0],
+                update = AddEntry()
+            ),
+            stopping_criterion = AI.StopAfterIteration(2)
+        )
+        generic = AI.initialize_state(problem, algorithm; iterate = [0.0])
+        state = ExtraFieldState(;
+            generic.substate,
+            stopping_criterion_state = generic.stopping_criterion_state
+        )
+        AI.solve!(problem, algorithm, state)
+        @test state.iteration == 2
+        @test state.iterate == [12.0]
+        @test state.extra == 7
     end
 end

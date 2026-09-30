@@ -1,5 +1,5 @@
-using .AlgorithmsInterfaceExtensions:
-    AlgorithmsInterfaceExtensions as AIE, StopWhenConverged, iterate_diff
+using .AlgorithmsInterfaceExtensions: AlgorithmsInterfaceExtensions as AIE,
+    IterateUntilConverged, StopWhenConverged, SweepAlgorithm, iterate_diff
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using DataGraphs: edge_data
 using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
@@ -79,135 +79,18 @@ function beliefpropagation(
         message_update_algorithm,
         Tuple{typeof(cache), typeof(factors), edgetype(factors)}
     )
-    subalgorithm = BeliefPropagationSweepAlgorithm(;
-        message_update_algorithm,
-        stopping_criterion = AI.StopAfterIteration(length(edges))
-    )
+    sweep = SweepAlgorithm(; schedule = edges, update = message_update_algorithm)
     stopping_criterion = select_beliefpropagation_stopping_criterion(stopping_criterion)
-    algorithm = BeliefPropagationAlgorithm(; edges, subalgorithm, stopping_criterion)
+    algorithm = IterateUntilConverged(; subalgorithm = sweep, stopping_criterion)
 
     return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
 end
-
-# === Layer 1: BP outer loop (iterative) ===
 
 struct BeliefPropagationProblem{Factors} <: AI.Problem
     factors::Factors
 end
 
-@kwdef struct BeliefPropagationAlgorithm{
-        Edges,
-        Subalgorithm <: AI.Algorithm,
-        StoppingCriterion <: AI.StoppingCriterion,
-    } <: AIE.NestedAlgorithm
-    edges::Edges
-    subalgorithm::Subalgorithm
-    stopping_criterion::StoppingCriterion
-end
-
-@kwdef mutable struct BeliefPropagationState{
-        Substate <: AI.State, StoppingCriterionState <: AI.StoppingCriterionState,
-    } <: AIE.NestedState
-    substate::Substate
-    iteration::Int = 0
-    stopping_criterion_state::StoppingCriterionState
-end
-
-function AI.initialize_state(
-        problem::BeliefPropagationProblem,
-        algorithm::BeliefPropagationAlgorithm;
-        iterate, iteration::Int = 0
-    )
-    subproblem = BeliefPropagationSweepProblem(problem.factors, algorithm.edges)
-    substate = AI.initialize_state(subproblem, algorithm.subalgorithm; iterate)
-    stopping_criterion_state = AI.initialize_state(
-        problem, algorithm, algorithm.stopping_criterion; iterate
-    )
-    return BeliefPropagationState(; iteration, stopping_criterion_state, substate)
-end
-
-function AI.initialize_state!(
-        problem::BeliefPropagationProblem,
-        algorithm::BeliefPropagationAlgorithm,
-        state::BeliefPropagationState;
-        iteration::Int = 0
-    )
-    state.iteration = iteration
-    AI.initialize_state!(
-        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
-    )
-    return state
-end
-
-function AIE.initialize_subsolve(
-        problem::BeliefPropagationProblem,
-        algorithm::BeliefPropagationAlgorithm,
-        state::BeliefPropagationState
-    )
-    subproblem = BeliefPropagationSweepProblem(problem.factors, algorithm.edges)
-    return subproblem, algorithm.subalgorithm, state.substate
-end
-
-# === Layer 2: one sweep over edges (iterative) ===
-
-struct BeliefPropagationSweepProblem{Factors, Edges} <: AI.Problem
-    factors::Factors
-    edges::Edges
-end
-
-@kwdef struct BeliefPropagationSweepAlgorithm{
-        MessageUpdateAlgorithm,
-        StoppingCriterion <: AI.StoppingCriterion,
-    } <: AI.Algorithm
-    message_update_algorithm::MessageUpdateAlgorithm = SimpleMessageUpdate()
-    stopping_criterion::StoppingCriterion
-end
-
-@kwdef mutable struct BeliefPropagationSweepState{
-        Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
-    } <: AI.State
-    iterate::Iterate
-    iteration::Int = 0
-    stopping_criterion_state::StoppingCriterionState
-end
-
-function AI.initialize_state(
-        problem::BeliefPropagationSweepProblem,
-        algorithm::BeliefPropagationSweepAlgorithm;
-        iterate, iteration::Int = 0
-    )
-    stopping_criterion_state = AI.initialize_state(
-        problem, algorithm, algorithm.stopping_criterion; iterate
-    )
-    return BeliefPropagationSweepState(; iterate, iteration, stopping_criterion_state)
-end
-
-function AI.initialize_state!(
-        problem::BeliefPropagationSweepProblem,
-        algorithm::BeliefPropagationSweepAlgorithm,
-        state::BeliefPropagationSweepState;
-        iteration::Int = 0
-    )
-    state.iteration = iteration
-    AI.initialize_state!(
-        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
-    )
-    return state
-end
-
-function AI.step!(
-        problem::BeliefPropagationSweepProblem,
-        algorithm::BeliefPropagationSweepAlgorithm,
-        state::BeliefPropagationSweepState
-    )
-    edge = problem.edges[state.iteration]
-    message_update!(
-        algorithm.message_update_algorithm, state.iterate, problem.factors, edge
-    )
-    return state
-end
-
-# === Layer 3: single-edge message update strategy ===
+# === Single-edge message update strategy ===
 
 # Strategy interface: a `MessageUpdateAlgorithm` defines how a single
 # message is computed and written back into the message store. Plug in a
@@ -216,6 +99,12 @@ end
 abstract type MessageUpdateAlgorithm <: AbstractAlgorithm end
 
 function message_update! end
+
+function AIE.update!(
+        algorithm::MessageUpdateAlgorithm, cache, problem::BeliefPropagationProblem, edge
+    )
+    return message_update!(algorithm, cache, problem.factors, edge)
+end
 
 # `args` tuple mirrors the `message_update!(cache, factors, edge)` call shape.
 function default_algorithm(::typeof(message_update!), ::Type{<:Tuple}; kwargs...)
