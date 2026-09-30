@@ -3,29 +3,9 @@ module ITensorNetworksNextTensorOperationsExt
 using Graphs: src
 using ITensorBase: ITensorBase, inds, names, rename, state, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, NormNetwork, braname,
-    default_nblocks, incoming_messages, kettensor
+    check_input, default_nblocks, incoming_messages, kettensor, updated_message
 using TensorAlgebra: TensorAlgebra as TA, TensorOperationsContract
 using TensorOperations: TensorOperations as TO
-
-function check_dense(t)
-    a = unnamed(t)
-    a isa DenseArray || throw(
-        ArgumentError("`BlockedMessageUpdate` requires dense storage, got $(typeof(a)).")
-    )
-    return t
-end
-
-# cuTENSOR throws `KeyError` when a contraction mixes element types, so reject that up front.
-check_eltypes(backend, tensors) = nothing
-function check_eltypes(::TO.cuTENSORBackend, tensors)
-    allequal(eltype, tensors) || throw(
-        ArgumentError(
-            "`BlockedMessageUpdate` on cuTENSOR needs the ket and incoming messages to share an " *
-                "element type, got $(unique(map(eltype, tensors)))."
-        )
-    )
-    return nothing
-end
 
 # The allocator `alg` contracts with, which the intermediates must also come from.
 function contract_allocator(alg::TensorOperationsContract)
@@ -62,14 +42,41 @@ function temporary_alg(alg::TensorOperationsContract)
 end
 temporary_alg(alg) = alg
 
+# Non-dense storage cannot be sliced by column. cuTENSOR throws `KeyError` when a contraction
+# mixes element types, so that is rejected here rather than partway through a message.
+function ITensorNetworksNext.check_input(
+        ::typeof(updated_message), algorithm::BlockedMessageUpdate, cache,
+        factors::NormNetwork, edge
+    )
+    ket = kettensor(factors[src(edge)])
+    tensors = [ket; map(state, collect(incoming_messages(cache, edge)))]
+    for t in tensors
+        unnamed(t) isa DenseArray || throw(
+            ArgumentError(
+                "`BlockedMessageUpdate` requires dense storage, got $(typeof(unnamed(t)))."
+            )
+        )
+    end
+    backend = contract_backend(algorithm.contract_alg, unnamed(ket))
+    if backend isa TO.cuTENSORBackend && !allequal(eltype, tensors)
+        throw(
+            ArgumentError(
+                "`BlockedMessageUpdate` on cuTENSOR needs the ket and incoming messages to " *
+                    "share an element type, got $(unique(map(eltype, tensors)))."
+            )
+        )
+    end
+    return nothing
+end
+
 function ITensorNetworksNext.updated_message(
         algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge
     )
+    check_input(updated_message, algorithm, cache, factors, edge)
     g = factors[src(edge)]
-    ket = check_dense(kettensor(g))
-    messages = map(m -> check_dense(state(m)), collect(incoming_messages(cache, edge)))
+    ket = kettensor(g)
+    messages = map(state, collect(incoming_messages(cache, edge)))
     alg = algorithm.contract_alg
-    check_eltypes(contract_backend(alg, unnamed(ket)), [ket; messages])
     T = promote_type(eltype(ket), map(eltype, messages)...)
     # Shares the ket's data; the closing contraction conjugates it through its `conj` op.
     bra = rename(n -> braname(g, n), ket)
