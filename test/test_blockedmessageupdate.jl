@@ -31,6 +31,21 @@ function relative_difference(a, b)
     return norm(a_host - state(b)) / norm(state(b))
 end
 
+# Records the arrays it allocates as temporaries and the arrays it is asked to free.
+struct RecordingAllocator
+    temporaries::Vector{Any}
+    freed::Vector{Any}
+end
+function TensorOperations.tensoralloc(ttype, structure, ::Val{true}, a::RecordingAllocator)
+    C = TensorOperations.tensoralloc(ttype, structure, Val(true))
+    push!(a.temporaries, C)
+    return C
+end
+function TensorOperations.tensorfree!(C, a::RecordingAllocator)
+    push!(a.freed, C)
+    return nothing
+end
+
 # Two sweeps from identity messages give messages that are not the identity.
 function swept_cache(nn)
     return beliefpropagation(
@@ -134,6 +149,27 @@ end
             message_update_algorithm = BlockedMessageUpdate(; nblocks = 3)
         )
         @test all(e -> relative_difference(blocked[e], simple[e]) <= 1.0e-10, edges(simple))
+    end
+
+    @testset "every temporary allocation is freed" begin
+        rng = StableRNG(1234)
+        nn = NormNetwork(random_network(rng, ComplexF64, named_grid((3, 3))))
+        cache = swept_cache(nn)
+        allocator = RecordingAllocator([], [])
+        algorithm = BlockedMessageUpdate(;
+            nblocks = 3, contract_alg = TensorOperationsContract(; allocator)
+        )
+        edge = NamedEdge((2, 2) => (2, 3))
+        simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
+        blocked = message_update!(algorithm, map(identity, cache), nn, edge)
+        @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
+        # (2, 2) has three incoming messages, so each of the three blocks makes three.
+        @test length(allocator.temporaries) >= 9
+        # TensorOperations frees its own scratch copies through their `Memory`, so match by pointer.
+        @test all(
+            a -> any(f -> pointer(f) == pointer(a), allocator.freed),
+            allocator.temporaries
+        )
     end
 
     @testset "automatic `nblocks`" begin
