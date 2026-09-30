@@ -6,6 +6,7 @@ using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
 using ITensorBase: AbstractITensor, inputnames, operator, outputnames, state
 using LinearAlgebra: norm, normalize, tr
 using NamedGraphs: forest_cover_edge_sequence, subgraph
+using TensorAlgebra: TensorOperationsContract
 
 # === Top-level user entry point ===
 
@@ -302,23 +303,46 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNet
 end
 
 """
-    BlockedMessageUpdate(; normalize = true, blocksize = nothing, workspace_limit = nothing,
-                           backend = nothing, allocator = nothing)
+    BlockedMessageUpdate(; normalize = true, nblocks = nothing, workspace_limit = nothing,
+                           contract_alg = TensorOperationsContract())
 
-Message update for a `NormNetwork` that contracts each message in blocks of `blocksize` columns of
-its outgoing ket leg, bounding the size of every intermediate. Requires TensorOperations to be
-loaded. `blocksize = nothing` uses the whole leg; `backend` and `allocator` are passed to
-`TensorOperations.tensorcontract!`, and `nothing` selects TensorOperations' defaults.
-`workspace_limit` is reserved and must be `nothing`.
+Message update for a `NormNetwork` that splits the outgoing ket leg of each message into `nblocks`
+column blocks of near-equal length, so each intermediate is about `1 / nblocks` of the ket. An
+`nblocks` larger than the leg's length gives one column per block, and `nblocks = nothing` chooses
+it per message from the contraction backend and the ket's size. Requires TensorOperations to be
+loaded. Every contraction runs with `contract_alg`, and intermediates are allocated and freed
+through its allocator. `workspace_limit` is reserved and must be `nothing`.
 """
-@kwdef struct BlockedMessageUpdate{Blocksize, WorkspaceLimit, Backend, Allocator} <:
-    MessageUpdateAlgorithm
+@kwdef struct BlockedMessageUpdate{ContractAlg} <: MessageUpdateAlgorithm
     normalize::Bool = true
-    blocksize::Blocksize = nothing
-    workspace_limit::WorkspaceLimit = nothing
-    backend::Backend = nothing
-    allocator::Allocator = nothing
+    nblocks::Union{Nothing, Int} = nothing
+    workspace_limit::Nothing = nothing
+    contract_alg::ContractAlg = TensorOperationsContract()
+    function BlockedMessageUpdate(normalize, nblocks, workspace_limit, contract_alg)
+        isnothing(nblocks) || nblocks isa Integer && nblocks > 0 ||
+            throw(
+            ArgumentError(
+                "`nblocks` must be `nothing` or a positive integer, got $nblocks."
+            )
+        )
+        isnothing(workspace_limit) || throw(
+            ArgumentError("`workspace_limit` is not supported yet and must be `nothing`.")
+        )
+        return new{typeof(contract_alg)}(normalize, nblocks, workspace_limit, contract_alg)
+    end
 end
+
+"""
+    default_nblocks(algorithm::BlockedMessageUpdate, ket::AbstractArray, χ::Integer) -> Int
+    default_nblocks(backend, ketbytes::Integer, χ::Integer) -> Int
+
+The number of column blocks `algorithm` splits a leg of length `χ` of the ket array `ket` into;
+the kernel caps it at `χ`. The first form returns `algorithm.nblocks` when it is set; for `nothing` it finds the
+TensorOperations backend `algorithm.contract_alg` contracts with and calls the second, which a
+backend overloads. Defined by the TensorOperations extension: 1 (the whole leg) by default, and on
+cuTENSOR about 16 blocks, each at least 4 MiB and at most 64 columns.
+"""
+function default_nblocks end
 
 function message_update!(algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge)
     return normnetwork_message_update!(algorithm, cache, factors, edge)
