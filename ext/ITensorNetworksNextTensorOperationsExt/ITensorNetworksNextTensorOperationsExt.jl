@@ -1,7 +1,7 @@
 module ITensorNetworksNextTensorOperationsExt
 
 using Graphs: src
-using ITensorBase: ITensorBase, ITensor, names, rename, state, unnamed
+using ITensorBase: ITensorBase, inds, names, rename, state, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, NormNetwork, braname,
     default_nblocks, incoming_messages, kettensor
 using TensorAlgebra: TensorAlgebra as TA, TensorOperationsContract
@@ -55,12 +55,12 @@ function ITensorNetworksNext.default_nblocks(
     return max(clamp(fld(ketbytes, 4 * 2^20), 1, 16), cld(χ, 64))
 end
 
-# Contracting a message into `x` replaces the ket link name they share by the message's bra name.
-function contracted_names(x, message)
-    ket_link = only(intersect(names(message), names(x)))
-    bra_link = only(setdiff(names(message), (ket_link,)))
-    return map(n -> n == ket_link ? bra_link : n, names(x))
+# The algorithm for the steps whose outputs are freed with `tensorfree!`, which `BufferAllocator`
+# only serves from its buffer when the allocation is marked temporary.
+function temporary_alg(alg::TensorOperationsContract)
+    return TensorOperationsContract(alg.backend, alg.allocator, true)
 end
+temporary_alg(alg) = alg
 
 function ITensorNetworksNext.updated_message(
         algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge
@@ -79,22 +79,17 @@ function ITensorNetworksNext.updated_message(
     χ = size(ket, ITensorBase.dim(ket, ket_out))
     nblocks = min(default_nblocks(algorithm, unnamed(ket), χ), χ)
     allocator = contract_allocator(alg)
-    # Each step swaps a ket link for its equal-length bra copy, so every intermediate has the
-    # shape of the ket slice and is allocated as an unpermuted copy of it.
-    same_shape = TO.trivialpermutation(ndims(ket), 0)
+    step_alg = temporary_alg(alg)
 
-    out = ITensor(similar(unnamed(ket), T, (χ, χ)), (braname(g, ket_out), ket_out))
+    # The message being replaced has the output's indices, bra copy then ket leg.
+    out = similar(ket, T, Tuple(inds(state(cache[edge]))))
     for block in 1:nblocks
         cols = (fld((block - 1) * χ, nblocks) + 1):fld(block * χ, nblocks)
         checkpoint = TO.allocator_checkpoint!(allocator)
         slice = view(ket, ket_out => cols)
         x = slice
         for m in messages
-            y = ITensor(
-                TO.tensoralloc_add(T, unnamed(x), same_shape, false, Val(true), allocator),
-                contracted_names(x, m)
-            )
-            TA.contract!(y, x, m; alg)
+            y = TA.contract(x, m; alg = step_alg)
             x === slice || TO.tensorfree!(unnamed(x), allocator)
             x = y
         end
