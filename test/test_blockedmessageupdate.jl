@@ -3,8 +3,8 @@ using GradedArrays: U1, gradedrange
 using Graphs: edges, vertices
 using ITensorBase: ITensor, Index, inds, inputnames, operator, outputnames, state, unnamed
 using ITensorNetworksNext: BlockedMessageUpdate, NormNetwork, SimpleMessageUpdate,
-    beliefpropagation, branamemap, insertlink!, message_environment, message_update!,
-    tensornetwork, updated_message
+    beliefpropagation, branamemap, default_nblocks, insertlink!, message_environment,
+    message_update!, tensornetwork, updated_message
 using JLArrays: JLArray
 using LinearAlgebra: norm
 using NamedGraphs: NamedEdge, incident_edges, named_grid, named_path_graph
@@ -38,13 +38,13 @@ function swept_cache(nn)
 end
 
 @testset "BlockedMessageUpdate" begin
-    @testset "matches SimpleMessageUpdate, T=$T, $arraytype, blocksize=$blocksize" for T in
+    @testset "matches SimpleMessageUpdate, T=$T, $arraytype, nblocks=$nblocks" for T in
             (
                 Float64,
                 ComplexF64,
             ),
             arraytype in (Array, JLArray),
-            blocksize in (3, 4)
+            nblocks in (2, 3)
 
         rng = StableRNG(1234)
         network = random_network(rng, T, named_grid((3, 3)))
@@ -56,7 +56,7 @@ end
             branamemap(nn)
         )
         device_cache = map(m -> adapt_message(arraytype, m), cache)
-        algorithm = BlockedMessageUpdate(; blocksize)
+        algorithm = BlockedMessageUpdate(; nblocks)
         for edge in edges(cache)
             simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
             blocked =
@@ -80,7 +80,7 @@ end
         for edge in edges(cache)
             simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
             blocked = message_update!(
-                BlockedMessageUpdate(; blocksize = 3), map(identity, cache), nn, edge
+                BlockedMessageUpdate(; nblocks = 3), map(identity, cache), nn, edge
             )
             @test eltype(unnamed(state(blocked[edge]))) === ComplexF64
             @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
@@ -94,7 +94,7 @@ end
         for edge in (NamedEdge(1 => 2), NamedEdge(4 => 3))
             simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
             blocked = message_update!(
-                BlockedMessageUpdate(; blocksize = 3), map(identity, cache), nn, edge
+                BlockedMessageUpdate(; nblocks = 10), map(identity, cache), nn, edge
             )
             @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
         end
@@ -109,7 +109,7 @@ end
             SimpleMessageUpdate(; normalize = false), map(identity, cache), nn, edge
         )
         blocked = message_update!(
-            BlockedMessageUpdate(; normalize = false, blocksize = 3),
+            BlockedMessageUpdate(; normalize = false, nblocks = 3),
             map(identity, cache), nn, edge
         )
         @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
@@ -124,23 +124,38 @@ end
         blocked = beliefpropagation(
             nn, message_environment(one, nn);
             stopping_criterion = (; maxiter = 3),
-            message_update_algorithm = BlockedMessageUpdate(; blocksize = 3)
+            message_update_algorithm = BlockedMessageUpdate(; nblocks = 3)
         )
         @test all(e -> relative_difference(blocked[e], simple[e]) <= 1.0e-10, edges(simple))
     end
 
-    @testset "argument errors" begin
-        rng = StableRNG(1234)
-        nn = NormNetwork(random_network(rng, Float64, named_grid((2, 2))))
-        cache = message_environment(one, nn)
-        edge = NamedEdge((1, 1) => (1, 2))
-        @test_throws ArgumentError updated_message(
-            BlockedMessageUpdate(; workspace_limit = 2^20), cache, nn, edge
-        )
-        @test_throws ArgumentError updated_message(
-            BlockedMessageUpdate(; blocksize = 0), cache, nn, edge
-        )
+    @testset "automatic `nblocks`" begin
+        @test isnothing(BlockedMessageUpdate().nblocks)
+        cutensor = TensorOperations.cuTENSORBackend()
+        MiB = 2^20
+        @test default_nblocks(cutensor, 1 * MiB, 32) == 1
+        @test default_nblocks(cutensor, 40 * MiB, 256) == 10
+        @test default_nblocks(cutensor, 1024 * MiB, 256) == 16
+        @test default_nblocks(cutensor, 40 * MiB, 4096) == 64
+        @test default_nblocks(TensorOperations.StridedBLAS(), 1024 * MiB, 4096) == 1
+        @test default_nblocks(BlockedMessageUpdate(), randn(4, 4, 4), 4) == 1
+        @test default_nblocks(BlockedMessageUpdate(; nblocks = 3), randn(4, 4, 4), 4) == 3
 
+        rng = StableRNG(1234)
+        nn = NormNetwork(random_network(rng, ComplexF64, named_grid((3, 3))))
+        cache = swept_cache(nn)
+        edge = NamedEdge((2, 2) => (2, 3))
+        simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
+        blocked = message_update!(BlockedMessageUpdate(), map(identity, cache), nn, edge)
+        @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
+    end
+
+    @testset "argument errors" begin
+        @test_throws ArgumentError BlockedMessageUpdate(; workspace_limit = 2^20)
+        @test_throws ArgumentError BlockedMessageUpdate(; nblocks = 0)
+        @test_throws ArgumentError BlockedMessageUpdate(; nblocks = 2.5)
+
+        rng = StableRNG(1234)
         site_range = gradedrange([U1(0) => 1, U1(1) => 1])
         path = named_path_graph(3)
         graded = tensornetwork(v -> randn(rng, (Index(site_range),)), vertices(path))
