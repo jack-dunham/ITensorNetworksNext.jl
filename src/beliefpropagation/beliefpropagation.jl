@@ -283,11 +283,13 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors, edge)
     return cache
 end
 
-# `NormNetwork`: the message is a doubled (ket/bra) bond operator. Contracting a plain vertex factor
-# with the incoming messages leaves the surviving bond legs dangling, so assign the bra/ket pairing
-# the norm network gives this edge (the same convention as `similar_message_environment`), in which
-# the message is positive semidefinite and its trace is a positive normalization.
-function normnetwork_message_update!(algorithm, cache, factors::NormNetwork, edge)
+# Bilinear-form network: the message is a doubled (ket/bra) bond operator. Contracting a plain
+# vertex factor with the incoming messages leaves the surviving bond legs dangling, so assign the
+# bra/ket pairing the network gives this edge (the same convention as `similar_message_environment`).
+# On a `NormNetwork` the message is positive semidefinite and its trace is a positive normalization.
+function bilinearform_message_update!(
+        algorithm, cache, factors::AbstractBilinearFormNetwork, edge
+    )
     new_tensor = updated_message(algorithm, cache, factors, edge)
     new_message = operator(new_tensor, outputnames(cache[edge]), inputnames(cache[edge]))
     if algorithm.normalize
@@ -298,15 +300,17 @@ function normnetwork_message_update!(algorithm, cache, factors::NormNetwork, edg
     return cache
 end
 
-function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
-    return normnetwork_message_update!(algorithm, cache, factors, edge)
+function message_update!(
+        algorithm::SimpleMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
 end
 
 """
     BlockedMessageUpdate(; normalize = true, nblocks = nothing, workspace_limit = nothing,
                            contract_alg = TensorOperationsContract())
 
-Message update for a `NormNetwork` that splits the outgoing ket leg of each message into `nblocks`
+Message update for a `NormNetwork` or a `QuadraticFormNetwork` that splits the outgoing ket leg of each message into `nblocks`
 column blocks of near-equal length, so each intermediate is about `1 / nblocks` of the ket. An
 `nblocks` larger than the leg's length gives one column per block, and `nblocks = nothing` chooses
 it per message from the contraction backend and the ket's size. Requires TensorOperations to be
@@ -344,8 +348,10 @@ cuTENSOR about 16 blocks, each at least 4 MiB and at most 64 columns.
 """
 function default_nblocks end
 
-function message_update!(algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge)
-    return normnetwork_message_update!(algorithm, cache, factors, edge)
+function message_update!(
+        algorithm::BlockedMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
 end
 
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===
