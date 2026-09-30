@@ -1,10 +1,11 @@
 using Adapt: adapt
 using GradedArrays: U1, gradedrange
 using Graphs: edges, vertices
-using ITensorBase: ITensor, Index, inds, inputnames, operator, outputnames, state, unnamed
-using ITensorNetworksNext: BlockedMessageUpdate, NormNetwork, SimpleMessageUpdate,
-    beliefpropagation, branamemap, default_nblocks, insertlink!, message_environment,
-    message_update!, tensornetwork, updated_message
+using ITensorBase:
+    ITensor, Index, inds, inputnames, name, operator, outputnames, state, unnamed
+using ITensorNetworksNext: BlockedMessageUpdate, NormNetwork, QuadraticFormNetwork,
+    SimpleMessageUpdate, beliefpropagation, branamemap, default_nblocks, insertlink!,
+    message_environment, message_update!, tensornetwork, updated_message
 using JLArrays: JLArray
 using LinearAlgebra: norm
 using NamedGraphs: NamedEdge, incident_edges, named_grid, named_path_graph
@@ -19,6 +20,26 @@ function random_network(rng, ::Type{T}, g; χ = 4) where {T}
     return tensornetwork(vertices(g)) do v
         return randn(rng, T, (Index(2), map(e -> l[e], incident_edges(g, v))...))
     end
+end
+
+# The quadratic form of a random state on `g` around a random operator acting on each site alone.
+# With `link`, the operators on the first two vertices also share an index of dimension 3.
+function random_quadratic_form(rng, ::Type{T}, g; χ = 4, d = 2, link = false) where {T}
+    l = Dict(e => Index(χ) for e in edges(g))
+    l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+    s = Dict(v => Index(d) for v in vertices(g))
+    ket = tensornetwork(vertices(g)) do v
+        return randn(rng, T, (s[v], map(e -> l[e], incident_edges(g, v))...))
+    end
+    out = Dict(v => Index(d) for v in vertices(g))
+    vs = collect(vertices(g))
+    L = Index(3)
+    ops = tensornetwork(vertices(g)) do v
+        is = (link && v in vs[1:2]) ? (out[v], s[v], L) : (out[v], s[v])
+        return randn(rng, T, is)
+    end
+    op = operator(ops, [name(out[v]) for v in vs], [name(s[v]) for v in vs])
+    return QuadraticFormNetwork(ket, op)
 end
 
 # `adapt` on a `NamedTensorOperator` returns a bare `ITensor`, so the operator is rebuilt.
@@ -191,6 +212,28 @@ end
         simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
         blocked = message_update!(BlockedMessageUpdate(), map(identity, cache), nn, edge)
         @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
+    end
+
+    @testset "quadratic form with a product operator, T=$T" for T in (Float64, ComplexF64)
+        qf = random_quadratic_form(StableRNG(1234), T, named_grid((3, 3)))
+        cache = swept_cache(qf)
+        for edge in edges(cache)
+            simple = message_update!(SimpleMessageUpdate(), map(identity, cache), qf, edge)
+            blocked = message_update!(
+                BlockedMessageUpdate(; nblocks = 3), map(identity, cache), qf, edge
+            )
+            @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
+        end
+
+        # Only the operator at an edge's source vertex has to act on its site alone.
+        linked = random_quadratic_form(StableRNG(1234), T, named_path_graph(3); link = true)
+        linked_cache = message_environment(one, linked)
+        @test_throws ArgumentError updated_message(
+            BlockedMessageUpdate(), linked_cache, linked, NamedEdge(1 => 2)
+        )
+        @test updated_message(
+            BlockedMessageUpdate(), linked_cache, linked, NamedEdge(3 => 2)
+        ) isa ITensor
     end
 
     @testset "argument errors" begin

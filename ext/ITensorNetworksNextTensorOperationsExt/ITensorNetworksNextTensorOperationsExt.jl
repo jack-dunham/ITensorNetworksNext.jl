@@ -1,9 +1,11 @@
 module ITensorNetworksNextTensorOperationsExt
 
 using Graphs: src
-using ITensorBase: ITensorBase, inds, names, rename, state, unnamed
-using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, NormNetwork, braname,
-    check_input, default_nblocks, incoming_messages, kettensor, updated_message
+using ITensorBase: ITensorBase, AbstractNamedTensor, ITensor, inds, inputnames, mulopadd!,
+    names, outputnames, rename, state, unnamed
+using ITensorNetworksNext: ITensorNetworksNext, AbstractBilinearFormNetwork,
+    BlockedMessageUpdate, NormGramian, QuadraticFormGramian, braname, default_nblocks,
+    incoming_messages, kettensor, operatortensor, updated_message
 using TensorAlgebra: TensorAlgebra as TA, TensorOperationsContract
 using TensorOperations: TensorOperations as TO
 
@@ -42,14 +44,37 @@ function temporary_alg(alg::TensorOperationsContract)
 end
 temporary_alg(alg) = alg
 
+# The ket and the tensors each block contracts into its slice in turn, checked before any
+# contraction runs.
+function message_contraction_tensors(algorithm, factor::NormGramian, messages)
+    rest = map(state, collect(messages))
+    return checked_tensors(algorithm, kettensor(factor), rest)
+end
+# The operator is one more step of the block contraction, so it may carry only its paired site
+# indices: a link index to a neighbouring operator would be a third leg on the message.
+function message_contraction_tensors(algorithm, factor::QuadraticFormGramian, messages)
+    op = factor.operator
+
+    linkinds = setdiff(names(op), [inputnames(op); outputnames(op)])
+
+    if !isempty(linkinds)
+        throw(
+            ArgumentError(
+                "`BlockedMessageUpdate` needs a product operator, but the operator has " *
+                    "indices $linkinds besides its inputs and outputs."
+            )
+        )
+    end
+
+    rest = [operatortensor(factor); map(state, collect(messages))]
+
+    return checked_tensors(algorithm, kettensor(factor), rest)
+end
+
 # Non-dense storage cannot be sliced by column. cuTENSOR throws `KeyError` when a contraction
 # mixes element types, so that is rejected here rather than partway through a message.
-function ITensorNetworksNext.check_input(
-        ::typeof(updated_message), algorithm::BlockedMessageUpdate, cache,
-        factors::NormNetwork, edge
-    )
-    ket = kettensor(factors[src(edge)])
-    tensors = [ket; map(state, collect(incoming_messages(cache, edge)))]
+function checked_tensors(algorithm, ket, rest)
+    tensors = [ket; rest]
     for t in tensors
         unnamed(t) isa DenseArray || throw(
             ArgumentError(
@@ -61,47 +86,60 @@ function ITensorNetworksNext.check_input(
     if backend isa TO.cuTENSORBackend && !allequal(eltype, tensors)
         throw(
             ArgumentError(
-                "`BlockedMessageUpdate` on cuTENSOR needs the ket and incoming messages to " *
-                    "share an element type, got $(unique(map(eltype, tensors)))."
+                "`BlockedMessageUpdate` on cuTENSOR needs the ket, incoming messages and " *
+                    "operator to share an element type, got $(unique(map(eltype, tensors)))."
             )
         )
     end
-    return nothing
+    return ket, rest
+end
+
+# `TensorAlgebra.contract` on named tensors, matching dimensions by name: `alg` selects the kernel
+# and, for `TensorOperationsContract`, the allocator of the output. Named `*` takes no algorithm.
+function prod_tensors(a1::AbstractNamedTensor, a2::AbstractNamedTensor; kwargs...)
+    a, labels = TA.contract(unnamed(a1), names(a1), unnamed(a2), names(a2); kwargs...)
+    return ITensor(a, labels)
 end
 
 function ITensorNetworksNext.updated_message(
-        algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge
+        algorithm::BlockedMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
     )
-    check_input(updated_message, algorithm, cache, factors, edge)
-    g = factors[src(edge)]
-    ket = kettensor(g)
-    messages = map(state, collect(incoming_messages(cache, edge)))
-    alg = algorithm.contract_alg
-    T = promote_type(eltype(ket), map(eltype, messages)...)
-    # Shares the ket's data; the closing contraction conjugates it through its `conj` op.
-    bra = rename(n -> braname(g, n), ket)
-    # The far vertex of `edge` may not be in `factors`, so the leg is found on the message.
-    ket_out = only(intersect(names(cache[edge]), names(ket)))
+    factor = factors[src(edge)]
+    messages = incoming_messages(cache, edge)
 
-    χ = size(ket, ITensorBase.dim(ket, ket_out))
+    ket, rest = message_contraction_tensors(algorithm, factor, messages)
+
+    # Shares the ket's data; the closing contraction conjugates it through its `conj` op.
+    bra = rename(n -> braname(factor, n), ket)
+    # The far vertex of `edge` may not be in `factors`, so the leg is found on the message.
+    ketdimname = only(intersect(names(cache[edge]), names(ket)))
+
+    χ = size(ket, ITensorBase.dim(ket, ketdimname))
+
     nblocks = min(default_nblocks(algorithm, unnamed(ket), χ), χ)
-    allocator = contract_allocator(alg)
-    step_alg = temporary_alg(alg)
+
+    contract_alg = algorithm.contract_alg
+    allocator = contract_allocator(contract_alg)
+    step_alg = temporary_alg(contract_alg)
 
     # The message being replaced has the output's indices, bra copy then ket leg.
+    T = promote_type(eltype(ket), map(eltype, rest)...)
     out = similar(ket, T, Tuple(inds(state(cache[edge]))))
+
     for block in 1:nblocks
         cols = (fld((block - 1) * χ, nblocks) + 1):fld(block * χ, nblocks)
         checkpoint = TO.allocator_checkpoint!(allocator)
-        slice = view(ket, ket_out => cols)
+        slice = view(ket, ketdimname => cols)
         x = slice
-        for m in messages
-            y = TA.contract(x, m; alg = step_alg)
+        for m in rest
+            y = prod_tensors(x, m; alg = step_alg)
             x === slice || TO.tensorfree!(unnamed(x), allocator)
+            # `x` is now bound to y, an object allocated via `allocator`.
             x = y
         end
-        TA.contractopadd!(
-            view(out, ket_out => cols), conj, bra, identity, x, true, false; alg
+        mulopadd!(
+            view(out, ketdimname => cols), conj, bra, identity, x, true, false;
+            alg = contract_alg
         )
         x === slice || TO.tensorfree!(unnamed(x), allocator)
         TO.allocator_reset!(allocator, checkpoint)

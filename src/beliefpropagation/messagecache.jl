@@ -185,9 +185,9 @@ function bethe_free_entropy(factors, messages)
 end
 bethe_free_energy(factors, messages) = -bethe_free_entropy(factors, messages)
 
-# ===================================== NormNetwork ====================================== #
+# ============================= AbstractBilinearFormNetwork ============================== #
 
-function similar_message_environment(nn::NormNetwork)
+function similar_message_environment(nn::AbstractBilinearFormNetwork)
     messages = mapmany(vertices(nn)) do vertex
         return map(in_incident_edges(nn, vertex)) do edge
             ket = ketnetwork(nn)
@@ -208,6 +208,6 @@ function similar_message_environment(nn::NormNetwork)
     return messagecache(messages)
 end
 
-function message_environment(f::Base.Callable, nn::NormNetwork)
+function message_environment(f::Base.Callable, nn::AbstractBilinearFormNetwork)
     return map(f, similar_message_environment(nn))
 end
