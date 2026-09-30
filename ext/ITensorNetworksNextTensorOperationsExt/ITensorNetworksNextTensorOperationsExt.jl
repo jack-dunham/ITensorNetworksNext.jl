@@ -7,12 +7,24 @@ using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, NormNetwor
 using TensorAlgebra: TensorAlgebra as TA, TensorOperationsContract
 using TensorOperations: TensorOperations as TO
 
-function promote_tensor(t, ::Type{T}) where {T}
+function check_dense(t)
     a = unnamed(t)
     a isa DenseArray || throw(
         ArgumentError("`BlockedMessageUpdate` requires dense storage, got $(typeof(a)).")
     )
-    return eltype(a) === T ? t : ITensor(T.(a), names(t))
+    return t
+end
+
+# cuTENSOR throws `KeyError` when a contraction mixes element types, so reject that up front.
+check_eltypes(backend, tensors) = nothing
+function check_eltypes(::TO.cuTENSORBackend, tensors)
+    allequal(eltype, tensors) || throw(
+        ArgumentError(
+            "`BlockedMessageUpdate` on cuTENSOR needs the ket and incoming messages to share an " *
+                "element type, got $(unique(map(eltype, tensors)))."
+        )
+    )
+    return nothing
 end
 
 # The allocator `alg` contracts with, which the intermediates must also come from.
@@ -54,17 +66,17 @@ function ITensorNetworksNext.updated_message(
         algorithm::BlockedMessageUpdate, cache, factors::NormNetwork, edge
     )
     g = factors[src(edge)]
-    messages = map(state, collect(incoming_messages(cache, edge)))
-    T = promote_type(eltype(kettensor(g)), map(eltype, messages)...)
-    ket = promote_tensor(kettensor(g), T)
-    messages = map(m -> promote_tensor(m, T), messages)
+    ket = check_dense(kettensor(g))
+    messages = map(m -> check_dense(state(m)), collect(incoming_messages(cache, edge)))
+    alg = algorithm.contract_alg
+    check_eltypes(contract_backend(alg, unnamed(ket)), [ket; messages])
+    T = promote_type(eltype(ket), map(eltype, messages)...)
     # Shares the ket's data; the closing contraction conjugates it through its `conj` op.
     bra = rename(n -> braname(g, n), ket)
     # The far vertex of `edge` may not be in `factors`, so the leg is found on the message.
     ket_out = only(intersect(names(cache[edge]), names(ket)))
 
     χ = size(ket, ITensorBase.dim(ket, ket_out))
-    alg = algorithm.contract_alg
     nblocks = min(default_nblocks(algorithm, unnamed(ket), χ), χ)
     allocator = contract_allocator(alg)
     # Each step swaps a ket link for its equal-length bra copy, so every intermediate has the
