@@ -9,6 +9,7 @@ using JLArrays: JLArray
 using LinearAlgebra: norm
 using NamedGraphs: NamedEdge, incident_edges, named_grid, named_path_graph
 using StableRNGs: StableRNG
+using TensorAlgebra: TensorOperationsContract
 using TensorOperations: TensorOperations
 using Test: @test, @test_throws, @testset
 
@@ -66,7 +67,7 @@ end
         end
     end
 
-    @testset "promotes a real ket and complex messages" begin
+    @testset "a real ket and complex messages" begin
         rng = StableRNG(1234)
         nn = NormNetwork(random_network(rng, Float64, named_grid((3, 3))))
         cache = map(swept_cache(nn)) do m
@@ -85,6 +86,12 @@ end
             @test eltype(unnamed(state(blocked[edge]))) === ComplexF64
             @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
         end
+        # The element-type check runs before any contraction, so no GPU is needed to reach it.
+        cutensor = TensorOperationsContract(; backend = TensorOperations.cuTENSORBackend())
+        @test_throws ArgumentError updated_message(
+            BlockedMessageUpdate(; contract_alg = cutensor), cache, nn,
+            NamedEdge((2, 2) => (2, 3))
+        )
     end
 
     @testset "leaf vertices, which have no incoming messages" begin
