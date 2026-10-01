@@ -72,7 +72,7 @@ end
 
 # A face is given as its cycle of directed edges.
 function environment_tensors(env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
-    return [corner(env, edge) for edge in face]
+    return view(env.corners, face)
 end
 
 function kikuchi_terms(tn, env::CTMEnvironment)
