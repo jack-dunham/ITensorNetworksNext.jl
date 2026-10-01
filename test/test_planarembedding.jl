@@ -20,10 +20,10 @@ using Test: @test, @test_throws, @testset
         end
         for e in edges(g)
             fs = (leftface(emb, e), leftface(emb, reverse(e)))
-            @test count(!iszero, fs) ≥ 1
+            @test count(!isnothing, fs) ≥ 1
         end
         interior = count(
-            e -> all(!iszero, (leftface(emb, e), leftface(emb, reverse(e)))),
+            e -> all(!isnothing, (leftface(emb, e), leftface(emb, reverse(e)))),
             edges(g)
         )
         @test 2 * interior + (ne(g) - interior) == sum(length, emb.faces)
