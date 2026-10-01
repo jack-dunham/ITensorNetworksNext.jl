@@ -289,24 +289,17 @@ function peel(product, corner_tensor, old_leg, new_leg)
 end
 
 """
-    face_update!(env, tn, face; maxdim, alg, frozen = false, align = false) -> env
+    face_update!(env, tn, face; maxdim, alg) -> env
 
 Replace the corners, bonds and edge tensors of `face` with the MP-BP solution of the face
 given the rest of `env`.
-
-With `frozen = true` the face keeps its bond indices, so the kept subspace must have their
-dimension. With `align = true` the new subspace basis is rotated onto the one the previous
-update of `face` stored, which keeps the tensors continuous between updates when eigenvalues
-share a modulus; the eigenvalue corner is then a full matrix.
 """
 function face_update!(
         env::CTMEnvironment,
         tn,
         face::Int;
         maxdim::Integer,
-        alg::AbstractAlgorithm,
-        frozen::Bool = false,
-        align::Bool = false
+        alg::AbstractAlgorithm
     )
     embedding = env.embedding
     face_edges = embedding.faces[face]
@@ -320,32 +313,12 @@ function face_update!(
     transfers = transfer_tensors(tn, env, face)
     product = TransferProduct(collect(transfers), cut_inds(tn, env, last(face_edges)))
 
-    frozen_dim = length(bond(env, first(face_edges)))
-    right_basis, left_basis, eigenvalues =
-        invariant_subspace(alg, product, frozen ? frozen_dim : maxdim)
+    right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
-    if frozen && bond_dim != frozen_dim
-        throw(
-            ArgumentError(
-                "Face $face keeps $bond_dim eigenvalues but its frozen bonds have dimension $frozen_dim."
-            )
-        )
-    end
-
     eigenvalue_corner = Matrix(Diagonal(eigenvalues))
-    if align
-        previous_basis = get(env.gauges, face, nothing)
-        if !isnothing(previous_basis) && size(previous_basis) == size(right_basis)
-            rotation = left_basis * previous_basis
-            right_basis = right_basis * rotation
-            left_basis = rotation \ left_basis
-            eigenvalue_corner = rotation \ (eigenvalue_corner * rotation)
-        end
-        env.gauges[face] = right_basis
-    end
 
     # The projectors and corners below take the face's new bonds from `env`.
-    frozen || foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face_edges)
+    foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face_edges)
     right_projectors = right_blocks(tn, env, face, transfers, right_basis)
     left_projectors = left_blocks(tn, env, face, transfers, left_basis, eigenvalue_corner)
 
