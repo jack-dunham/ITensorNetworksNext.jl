@@ -1,4 +1,4 @@
-using Dictionaries: set!
+using Dictionaries: Dictionary, set!
 using Graphs: dst, src
 using ITensorBase: Index, name, names
 using LinearAlgebra: Diagonal, I, eigen, inv, norm, ordschur, qr, schur
@@ -216,19 +216,21 @@ function face_update!(
         )
     end
 
-    cut_indices = [cut_inds(tn, env, edge) for edge in face_edges]
-    transfer_tensors = [corner_transfer_matrix(tn, env, edge) for edge in face_edges]
-    transfer_matrices = [
-        matricize(
-                transfer_tensors[i] / norm(transfer_tensors[i]),
-                cut_indices[mod1(i - 1, nedges)],
-                cut_indices[i]
-            ) for i in 1:nedges
-    ]
+    transfer_matrices = Dictionary(
+        face_edges,
+        map(face_edges) do edge
+            transfer = corner_transfer_matrix(tn, env, edge)
+            return matricize(
+                transfer / norm(transfer),
+                cut_inds(tn, env, prev_edge(embedding, edge)),
+                cut_inds(tn, env, edge)
+            )
+        end
+    )
 
     frozen_dim = length(bond(env, first(face_edges)))
     right_basis, left_basis, eigenvalues = invariant_subspace(
-        alg, TransferProduct(transfer_matrices), frozen ? frozen_dim : maxdim
+        alg, TransferProduct(collect(transfer_matrices)), frozen ? frozen_dim : maxdim
     )
     bond_dim = length(eigenvalues)
     if frozen && bond_dim != frozen_dim
@@ -251,34 +253,39 @@ function face_update!(
         env.gauges[face] = right_basis
     end
 
-    right_bases = Vector{Matrix{eltype(right_basis)}}(undef, nedges)
-    left_bases = Vector{Matrix{eltype(left_basis)}}(undef, nedges)
-    right_bases[nedges], left_bases[nedges] = right_basis, left_basis
-    for i in nedges:-1:2
-        right_bases[i - 1] = transfer_matrices[i] * right_bases[i]
+    # The eigenvalue corner sits between this edge and the last one.
+    eigenvalue_edge = face_edges[end - 1]
+
+    right_bases = Dictionary([last(face_edges)], [right_basis])
+    for edge in reverse(face_edges[2:end])
+        set!(
+            right_bases,
+            prev_edge(embedding, edge),
+            transfer_matrices[edge] * right_bases[edge]
+        )
     end
 
-    left_bases[1] = left_bases[nedges] * transfer_matrices[1]
-    for i in 2:(nedges - 2)
-        left_bases[i] = left_bases[i - 1] * transfer_matrices[i]
-    end
-    left_bases[nedges - 1] =
-        (eigenvalue_corner \ left_bases[nedges - 2]) * transfer_matrices[nedges - 1]
-
-    new_bonds = if frozen
-        [bond(env, edge) for edge in face_edges]
-    else
-        [Index(bond_dim) for _ in 1:nedges]
+    left_bases = Dictionary([last(face_edges)], [left_basis])
+    for edge in face_edges[1:(end - 1)]
+        incoming = left_bases[prev_edge(embedding, edge)]
+        edge == eigenvalue_edge && (incoming = eigenvalue_corner \ incoming)
+        set!(left_bases, edge, incoming * transfer_matrices[edge])
     end
 
-    for i in 1:nedges
-        edge = face_edges[i]
+    new_bonds = Dictionary(
+        face_edges, [frozen ? bond(env, edge) : Index(bond_dim) for edge in face_edges]
+    )
+
+    for edge in face_edges
         reversed = reverse(edge)
 
-        right_projector =
-            unmatricize(right_bases[i], cut_indices[i], (new_bonds[mod1(i - 1, nedges)],))
+        right_projector = unmatricize(
+            right_bases[edge], cut_inds(tn, env, edge),
+            (new_bonds[prev_edge(embedding, edge)],)
+        )
         left_projector = unmatricize(
-            transpose(left_bases[i]), cut_indices[i], (new_bonds[mod1(i + 1, nedges)],)
+            transpose(left_bases[edge]), cut_inds(tn, env, edge),
+            (new_bonds[next_edge(embedding, edge)],)
         )
 
         env.edgetensors[reversed] = peel(
@@ -293,15 +300,16 @@ function face_update!(
     end
 
     elt = promote_type(eltype(right_basis), eltype(left_basis), eltype(eigenvalue_corner))
-    for i in 1:nedges
-        corner_matrix = if i == nedges - 1
+    for edge in face_edges
+        corner_matrix = if edge == eigenvalue_edge
             Matrix{elt}(eigenvalue_corner)
         else
             Matrix{elt}(I, bond_dim, bond_dim)
         end
-        env.corners[face_edges[i]] =
-            unmatricize(corner_matrix, (new_bonds[i],), (new_bonds[mod1(i + 1, nedges)],))
-        frozen || set!(env.bonds, face_edges[i], new_bonds[i])
+        env.corners[edge] = unmatricize(
+            corner_matrix, (new_bonds[edge],), (new_bonds[next_edge(embedding, edge)],)
+        )
+        frozen || set!(env.bonds, edge, new_bonds[edge])
     end
     return env
 end
