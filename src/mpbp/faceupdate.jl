@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary, set!
 using Graphs: dst, src
-using ITensorBase: Index, name, names
-using LinearAlgebra: Diagonal, I, eigen, inv, norm, ordschur, qr, schur
+using ITensorBase: AbstractNamedTensor, Index, id, name, names, rename, state
+using LinearAlgebra: Diagonal, eigen, inv, norm, ordschur, qr, schur
 using Random: Xoshiro
 using TensorAlgebra: matricize, unmatricize
 
@@ -18,24 +18,51 @@ end
 
 """
     TransferProduct(matrices)
+    TransferProduct(tensors, cut)
 
-The product `matrices[1] * matrices[2] * ⋯`, held unformed. Multiplying it by a block from
-either side applies the factors one at a time.
+The product `factors[1] * factors[2] * ⋯`, held unformed. Multiplying it by a block from
+either side applies the factors one at a time. Named `tensors` are contracted over the cuts
+they share and the product maps `cut` to itself; a block's rows or columns then run over `cut`.
 """
-struct TransferProduct{M <: AbstractMatrix}
-    matrices::Vector{M}
+struct TransferProduct{F, C <: Tuple}
+    factors::Vector{F}
+    cut::C
+end
+TransferProduct(matrices::Vector{<:AbstractMatrix}) = TransferProduct(matrices, ())
+
+const MatrixTransferProduct = TransferProduct{<:AbstractMatrix}
+const NamedTransferProduct = TransferProduct{<:AbstractNamedTensor}
+
+Base.eltype(product::TransferProduct) = mapreduce(eltype, promote_type, product.factors)
+
+function Base.size(product::MatrixTransferProduct, dim::Integer)
+    return size(dim == 1 ? first(product.factors) : last(product.factors), dim)
+end
+Base.Matrix(product::MatrixTransferProduct) = foldl(*, product.factors)
+function Base.:*(product::MatrixTransferProduct, block::AbstractMatrix)
+    return foldr(*, product.factors; init = block)
+end
+function Base.:*(block::AbstractMatrix, product::MatrixTransferProduct)
+    return foldl(*, product.factors; init = block)
 end
 
-function Base.size(product::TransferProduct, dim::Integer)
-    return size(dim == 1 ? first(product.matrices) : last(product.matrices), dim)
+Base.size(product::NamedTransferProduct, dim::Integer) = prod(length, product.cut)
+function Base.Matrix(product::NamedTransferProduct)
+    # The first factor's copy of `cut` is renamed, so the last factor does not contract with it.
+    output = map(index -> Index(length(index)), product.cut)
+    first_factor = rename(first(product.factors), (product.cut .=> output)...)
+    closed = foldl(*, product.factors[2:end]; init = first_factor)
+    return matricize(closed, output, product.cut)
 end
-Base.eltype(product::TransferProduct) = mapreduce(eltype, promote_type, product.matrices)
-Base.Matrix(product::TransferProduct) = foldl(*, product.matrices)
-function Base.:*(product::TransferProduct, block::AbstractMatrix)
-    return foldr(*, product.matrices; init = block)
+function Base.:*(product::NamedTransferProduct, block::AbstractMatrix)
+    column = Index(size(block, 2))
+    named_block = unmatricize(block, product.cut, (column,))
+    return matricize(foldr(*, product.factors; init = named_block), product.cut, (column,))
 end
-function Base.:*(block::AbstractMatrix, product::TransferProduct)
-    return foldl(*, product.matrices; init = block)
+function Base.:*(block::AbstractMatrix, product::NamedTransferProduct)
+    row = Index(size(block, 1))
+    named_block = unmatricize(block, (row,), product.cut)
+    return matricize(foldl(*, product.factors; init = named_block), (row,), product.cut)
 end
 
 # Number of leading `eigenvalues`, sorted by decreasing modulus, to keep: at most `maxdim`, above
@@ -180,6 +207,80 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
     return transfer
 end
 
+# Normalised transfer tensor at each edge of `face`.
+function transfer_tensors(tn, env::CTMEnvironment, face::Int)
+    face_edges = env.embedding.faces[face]
+    transfers = map(face_edges) do edge
+        # `state` drops the operator pairing a `NormNetwork` vertex tensor carries.
+        transfer = state(corner_transfer_matrix(tn, env, edge))
+        return transfer / norm(transfer)
+    end
+    return Dictionary(face_edges, transfers)
+end
+
+# The eigenvalue corner of a face sits between this edge and the face's last edge.
+eigenvalue_edge(face_edges) = face_edges[end - 1]
+
+# Right projector at each edge of `face`, carried backwards from `right_basis` at the last
+# edge; the one at an edge has that edge's cut and the bond of the face edge before it.
+function right_blocks(tn, env::CTMEnvironment, face::Int, transfers, right_basis)
+    embedding = env.embedding
+    face_edges = embedding.faces[face]
+    last_edge = last(face_edges)
+    bond_before(edge) = bond(env, prev_edge(embedding, edge))
+
+    blocks = Dictionary(
+        [last_edge],
+        [unmatricize(right_basis, cut_inds(tn, env, last_edge), (bond_before(last_edge),))]
+    )
+    for edge in reverse(face_edges[2:end])
+        previous = prev_edge(embedding, edge)
+        block = transfers[edge] * blocks[edge]
+        set!(blocks, previous, rename(block, bond_before(edge) => bond_before(previous)))
+    end
+    return blocks
+end
+
+# Left projector at each edge of `face`, carried forwards from `left_basis` at the last edge
+# and divided by `eigenvalue_corner` at its edge; it has the bond of the face edge after it.
+function left_blocks(
+        tn,
+        env::CTMEnvironment,
+        face::Int,
+        transfers,
+        left_basis,
+        eigenvalue_corner
+    )
+    embedding = env.embedding
+    face_edges = embedding.faces[face]
+    last_edge = last(face_edges)
+    divided_edge = eigenvalue_edge(face_edges)
+    bond_after(edge) = bond(env, next_edge(embedding, edge))
+
+    blocks = Dictionary(
+        [last_edge],
+        [
+            unmatricize(
+                transpose(left_basis), cut_inds(tn, env, last_edge),
+                (bond_after(last_edge),)
+            ),
+        ]
+    )
+    inverse_corner = unmatricize(
+        inv(eigenvalue_corner), (bond_after(divided_edge),), (bond(env, divided_edge),)
+    )
+    for edge in face_edges[1:(end - 1)]
+        block = blocks[prev_edge(embedding, edge)] * transfers[edge]
+        block = if edge == divided_edge
+            inverse_corner * block
+        else
+            rename(block, bond(env, edge) => bond_after(edge))
+        end
+        set!(blocks, edge, block)
+    end
+    return blocks
+end
+
 # `product` equals `A` contracted with `corner_tensor` over `new_leg`; returns `A`, whose leg
 # `old_leg` becomes `new_leg`.
 function peel(product, corner_tensor, old_leg, new_leg)
@@ -216,22 +317,12 @@ function face_update!(
         )
     end
 
-    transfer_matrices = Dictionary(
-        face_edges,
-        map(face_edges) do edge
-            transfer = corner_transfer_matrix(tn, env, edge)
-            return matricize(
-                transfer / norm(transfer),
-                cut_inds(tn, env, prev_edge(embedding, edge)),
-                cut_inds(tn, env, edge)
-            )
-        end
-    )
+    transfers = transfer_tensors(tn, env, face)
+    product = TransferProduct(collect(transfers), cut_inds(tn, env, last(face_edges)))
 
     frozen_dim = length(bond(env, first(face_edges)))
-    right_basis, left_basis, eigenvalues = invariant_subspace(
-        alg, TransferProduct(collect(transfer_matrices)), frozen ? frozen_dim : maxdim
-    )
+    right_basis, left_basis, eigenvalues =
+        invariant_subspace(alg, product, frozen ? frozen_dim : maxdim)
     bond_dim = length(eigenvalues)
     if frozen && bond_dim != frozen_dim
         throw(
@@ -253,63 +344,33 @@ function face_update!(
         env.gauges[face] = right_basis
     end
 
-    # The eigenvalue corner sits between this edge and the last one.
-    eigenvalue_edge = face_edges[end - 1]
-
-    right_bases = Dictionary([last(face_edges)], [right_basis])
-    for edge in reverse(face_edges[2:end])
-        set!(
-            right_bases,
-            prev_edge(embedding, edge),
-            transfer_matrices[edge] * right_bases[edge]
-        )
-    end
-
-    left_bases = Dictionary([last(face_edges)], [left_basis])
-    for edge in face_edges[1:(end - 1)]
-        incoming = left_bases[prev_edge(embedding, edge)]
-        edge == eigenvalue_edge && (incoming = eigenvalue_corner \ incoming)
-        set!(left_bases, edge, incoming * transfer_matrices[edge])
-    end
-
-    new_bonds = Dictionary(
-        face_edges, [frozen ? bond(env, edge) : Index(bond_dim) for edge in face_edges]
-    )
+    # The projectors and corners below take the face's new bonds from `env`.
+    frozen || foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face_edges)
+    right_projectors = right_blocks(tn, env, face, transfers, right_basis)
+    left_projectors = left_blocks(tn, env, face, transfers, left_basis, eigenvalue_corner)
 
     for edge in face_edges
         reversed = reverse(edge)
 
-        right_projector = unmatricize(
-            right_bases[edge], cut_inds(tn, env, edge),
-            (new_bonds[prev_edge(embedding, edge)],)
-        )
-        left_projector = unmatricize(
-            transpose(left_bases[edge]), cut_inds(tn, env, edge),
-            (new_bonds[next_edge(embedding, edge)],)
-        )
-
         env.edgetensors[reversed] = peel(
-            right_projector, corner(env, reversed),
+            right_projectors[edge], corner(env, reversed),
             bond(env, reversed), bond(env, next_edge(embedding, reversed))
         )
         before_reversed = prev_edge(embedding, reversed)
         env.edgetensors[edge] = peel(
-            left_projector, corner(env, before_reversed),
+            left_projectors[edge], corner(env, before_reversed),
             bond(env, reversed), bond(env, before_reversed)
         )
     end
 
     elt = promote_type(eltype(right_basis), eltype(left_basis), eltype(eigenvalue_corner))
     for edge in face_edges
-        corner_matrix = if edge == eigenvalue_edge
-            Matrix{elt}(eigenvalue_corner)
+        bonds = ((bond(env, edge),), (bond(env, next_edge(embedding, edge)),))
+        env.corners[edge] = if edge == eigenvalue_edge(face_edges)
+            unmatricize(Matrix{elt}(eigenvalue_corner), bonds...)
         else
-            Matrix{elt}(I, bond_dim, bond_dim)
+            id(elt, bonds...)
         end
-        env.corners[edge] = unmatricize(
-            corner_matrix, (new_bonds[edge],), (new_bonds[next_edge(embedding, edge)],)
-        )
-        frozen || set!(env.bonds, edge, new_bonds[edge])
     end
     return env
 end
