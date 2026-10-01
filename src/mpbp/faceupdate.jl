@@ -1,3 +1,4 @@
+using AlgorithmsInterface: AlgorithmsInterface as AI
 using Dictionaries: Dictionary, set!
 using Graphs: dst, src
 using ITensorBase: AbstractNamedTensor, Index, id, name, names, rename, state
@@ -136,6 +137,119 @@ end
 
 orthonormal_columns(block) = Matrix(qr(block).Q)
 
+struct InvariantSubspaceProblem{Operator} <: AI.Problem
+    matrix::Operator
+    maxdim::Int
+end
+
+# Iterates `subspace_iteration`'s Rayleigh–Ritz step; the iterate is the (right, left) pair of
+# blocks, and `ritz` holds the kept Ritz pairs of the last step.
+struct RayleighRitzIteration{StoppingCriterion <: AI.StoppingCriterion} <: AI.Algorithm
+    subspace_iteration::SubspaceIteration
+    stopping_criterion::StoppingCriterion
+end
+
+@kwdef mutable struct RayleighRitzState{Iterate, StoppingCriterionState} <: AI.State
+    iterate::Iterate
+    iteration::Int = 0
+    ritz = nothing
+    residual::Float64 = Inf
+    stopping_criterion_state::StoppingCriterionState
+end
+
+function AI.initialize_state(
+        problem::InvariantSubspaceProblem, algorithm::RayleighRitzIteration; iterate
+    )
+    stopping_criterion_state = AI.initialize_state(
+        problem, algorithm, algorithm.stopping_criterion; iterate
+    )
+    return RayleighRitzState(; iterate, stopping_criterion_state)
+end
+
+function AI.step!(
+        problem::InvariantSubspaceProblem, algorithm::RayleighRitzIteration,
+        state::RayleighRitzState
+    )
+    (; matrix, maxdim) = problem
+    right, left = state.iterate
+    right_image = matrix * right
+    left_image = left * matrix
+
+    overlap = left * right
+    ritz_matrix = overlap \ (left * right_image)
+    decomposition = eigen(ritz_matrix)
+    order = sortperm(abs.(decomposition.values); rev = true)
+    eigenvalues = decomposition.values[order]
+    ritz_vectors = decomposition.vectors[:, order]
+    nkept = kept_count(algorithm.subspace_iteration, eigenvalues, maxdim)
+
+    kept = 1:nkept
+    right_basis = right * ritz_vectors[:, kept]
+    left_rows = left_invariant_rows(ritz_matrix, eigenvalues, nkept)
+    left_transform = (left_rows * (overlap \ left) * right_basis) \ left_rows
+    left_basis = left_transform * (overlap \ left)
+    values = Diagonal(eigenvalues[kept])
+    scale = abs(first(eigenvalues))
+    right_residual =
+        norm(right_image * ritz_vectors[:, kept] - right_basis * values) /
+        (scale * norm(right_basis))
+    left_residual =
+        norm(left_transform * (overlap \ left_image) - values * left_basis) /
+        (scale * norm(left_basis))
+
+    state.ritz = (right_basis, left_basis, eigenvalues[kept])
+    state.residual = max(right_residual, left_residual)
+    state.iterate = (
+        orthonormal_columns(right_image),
+        transpose(orthonormal_columns(transpose(left_image))),
+    )
+    return state
+end
+
+function AI.finalize_state!(
+        ::InvariantSubspaceProblem, algorithm::RayleighRitzIteration, state::RayleighRitzState
+    )
+    (; tol, maxiter) = algorithm.subspace_iteration
+    state.residual < tol || error(
+        "`SubspaceIteration` stopped after $maxiter iterations with residual " *
+            "$(state.residual), not below `tol` = $tol."
+    )
+    return state.ritz
+end
+
+# Stops once the `residual` of a `RayleighRitzState` is below `tol`.
+struct StopWhenResidualBelow <: AI.StoppingCriterion
+    tol::Float64
+end
+
+function AI.initialize_state(
+        ::AI.Problem, ::AI.Algorithm, ::StopWhenResidualBelow; kwargs...
+    )
+    return AI.DefaultStoppingCriterionState()
+end
+function AI.initialize_state!(
+        ::AI.Problem, ::AI.Algorithm, ::StopWhenResidualBelow,
+        criterion_state::AI.DefaultStoppingCriterionState; kwargs...
+    )
+    criterion_state.at_iteration = -1
+    return criterion_state
+end
+function AI.is_finished(
+        ::AI.Problem, ::AI.Algorithm, state::AI.State, criterion::StopWhenResidualBelow,
+        ::AI.DefaultStoppingCriterionState
+    )
+    return state.residual < criterion.tol
+end
+function AI.is_finished!(
+        problem::AI.Problem, algorithm::AI.Algorithm, state::AI.State,
+        criterion::StopWhenResidualBelow, criterion_state::AI.DefaultStoppingCriterionState
+    )
+    finished = AI.is_finished(problem, algorithm, state, criterion, criterion_state)
+    finished && (criterion_state.at_iteration = state.iteration)
+    return finished
+end
+AI.indicates_convergence(::StopWhenResidualBelow) = true
+
 function invariant_subspace(alg::SubspaceIteration, matrix, maxdim::Integer)
     dim = size(matrix, 1)
     nblock = min(dim, maxdim + alg.oversampling)
@@ -143,43 +257,10 @@ function invariant_subspace(alg::SubspaceIteration, matrix, maxdim::Integer)
     right = orthonormal_columns(randn(rng, eltype(matrix), dim, nblock))
     left = transpose(orthonormal_columns(randn(rng, eltype(matrix), dim, nblock)))
 
-    residual = Inf
-    for _ in 1:alg.maxiter
-        right_image = matrix * right
-        left_image = left * matrix
-
-        # Rayleigh–Ritz on the pair of blocks.
-        overlap = left * right
-        ritz_matrix = overlap \ (left * right_image)
-        decomposition = eigen(ritz_matrix)
-        order = sortperm(abs.(decomposition.values); rev = true)
-        eigenvalues = decomposition.values[order]
-        ritz_vectors = decomposition.vectors[:, order]
-        nkept = kept_count(alg, eigenvalues, maxdim)
-
-        kept = 1:nkept
-        right_basis = right * ritz_vectors[:, kept]
-        left_rows = left_invariant_rows(ritz_matrix, eigenvalues, nkept)
-        left_transform = (left_rows * (overlap \ left) * right_basis) \ left_rows
-        left_basis = left_transform * (overlap \ left)
-        values = Diagonal(eigenvalues[kept])
-        scale = abs(first(eigenvalues))
-        right_residual =
-            norm(right_image * ritz_vectors[:, kept] - right_basis * values) /
-            (scale * norm(right_basis))
-        left_residual =
-            norm(left_transform * (overlap \ left_image) - values * left_basis) /
-            (scale * norm(left_basis))
-        residual = max(right_residual, left_residual)
-        residual < alg.tol && return right_basis, left_basis, eigenvalues[kept]
-
-        right = orthonormal_columns(right_image)
-        left = transpose(orthonormal_columns(transpose(left_image)))
-    end
-    return error(
-        "`SubspaceIteration` stopped after $(alg.maxiter) iterations with residual " *
-            "$residual, not below `tol` = $(alg.tol)."
-    )
+    problem = InvariantSubspaceProblem(matrix, maxdim)
+    stopping_criterion = AI.StopAfterIteration(alg.maxiter) | StopWhenResidualBelow(alg.tol)
+    algorithm = RayleighRitzIteration(alg, stopping_criterion)
+    return AI.solve(problem, algorithm; iterate = (right, left))
 end
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
