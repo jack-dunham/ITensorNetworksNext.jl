@@ -64,15 +64,8 @@ function right_blocks(tn, env::CTMEnvironment, face::Int, transfers, right_basis
 end
 
 # Left projector at each edge of `face`, carried forwards from `left_basis` at the last edge
-# and divided by `eigenvalue_corner` at its edge; it has the bond of the face edge after it.
-function left_blocks(
-        tn,
-        env::CTMEnvironment,
-        face::Int,
-        transfers,
-        left_basis,
-        eigenvalue_corner
-    )
+# and divided by the face's eigenvalue corner; it has the bond of the face edge after it.
+function left_blocks(tn, env::CTMEnvironment, face::Int, transfers, left_basis)
     embedding = env.embedding
     face_edges = embedding.faces[face]
     last_edge = last(face_edges)
@@ -88,13 +81,10 @@ function left_blocks(
             ),
         ]
     )
-    inverse_corner = unmatricize(
-        inv(eigenvalue_corner), (bond_after(divided_edge),), (bond(env, divided_edge),)
-    )
     for edge in face_edges[1:(end - 1)]
         block = blocks[prev_edge(embedding, edge)] * transfers[edge]
         block = if edge == divided_edge
-            inverse_corner * block
+            inverse_corner(env, divided_edge) * block
         else
             rename(block, bond(env, edge) => bond_after(edge))
         end
@@ -103,11 +93,11 @@ function left_blocks(
     return blocks
 end
 
-# `product` equals `A` contracted with `corner_tensor` over `new_leg`; returns `A`, whose leg
-# `old_leg` becomes `new_leg`.
-function peel(product, corner_tensor, old_leg, new_leg)
-    inverse = inv(matricize(corner_tensor, (new_leg,), (old_leg,)))
-    return product * unmatricize(inverse, (old_leg,), (new_leg,))
+# Inverse of `c[edge]` as a map between its two bonds, so that an edge tensor contracted
+# with `c[edge]` and then with this is unchanged.
+function inverse_corner(env::CTMEnvironment, edge)
+    a, b = bond(env, edge), bond(env, next_edge(env.embedding, edge))
+    return unmatricize(inv(matricize(corner(env, edge), (a,), (b,))), (b,), (a,))
 end
 
 """
@@ -139,25 +129,8 @@ function face_update!(
     bond_dim = length(eigenvalues)
     eigenvalue_corner = Matrix(Diagonal(eigenvalues))
 
-    # The projectors and corners below take the face's new bonds from `env`.
+    # The corners and projectors below take the face's new bonds from `env`.
     foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face_edges)
-    right_projectors = right_blocks(tn, env, face, transfers, right_basis)
-    left_projectors = left_blocks(tn, env, face, transfers, left_basis, eigenvalue_corner)
-
-    for edge in face_edges
-        reversed = reverse(edge)
-
-        env.edgetensors[reversed] = peel(
-            right_projectors[edge], corner(env, reversed),
-            bond(env, reversed), bond(env, next_edge(embedding, reversed))
-        )
-        before_reversed = prev_edge(embedding, reversed)
-        env.edgetensors[edge] = peel(
-            left_projectors[edge], corner(env, before_reversed),
-            bond(env, reversed), bond(env, before_reversed)
-        )
-    end
-
     elt = promote_type(eltype(right_basis), eltype(left_basis), eltype(eigenvalue_corner))
     for edge in face_edges
         bonds = ((bond(env, edge),), (bond(env, next_edge(embedding, edge)),))
@@ -166,6 +139,15 @@ function face_update!(
         else
             id(elt, bonds...)
         end
+    end
+
+    right_projectors = right_blocks(tn, env, face, transfers, right_basis)
+    left_projectors = left_blocks(tn, env, face, transfers, left_basis)
+    for edge in face_edges
+        reversed = reverse(edge)
+        env.edgetensors[reversed] = right_projectors[edge] * inverse_corner(env, reversed)
+        env.edgetensors[edge] =
+            left_projectors[edge] * inverse_corner(env, prev_edge(embedding, reversed))
     end
     return env
 end
