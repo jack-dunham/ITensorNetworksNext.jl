@@ -13,8 +13,6 @@ end
 @kwdef struct FaceUpdate{Alg} <: AbstractAlgorithm
     maxdim::Int
     subspace_algorithm::Alg
-    frozen::Bool = false
-    align::Bool = false
 end
 
 function AIE.update!(update::FaceUpdate, env, problem::CTMRGProblem, face)
@@ -23,9 +21,7 @@ function AIE.update!(update::FaceUpdate, env, problem::CTMRGProblem, face)
         problem.network,
         face;
         maxdim = update.maxdim,
-        alg = update.subspace_algorithm,
-        frozen = update.frozen,
-        align = update.align
+        alg = update.subspace_algorithm
     )
 end
 
