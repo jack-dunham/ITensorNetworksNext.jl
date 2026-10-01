@@ -67,8 +67,8 @@ const LATTICES = (
     end
 
     function run_sweeps!(env, tn; maxdim, nsweeps)
-        for _ in 1:nsweeps, f in eachindex(env.embedding.faces)
-            face_update!(env, tn, f; maxdim, alg = DenseEig())
+        for _ in 1:nsweeps, face in env.embedding.faces
+            face_update!(env, tn, face; maxdim, alg = DenseEig())
         end
         return env
     end
