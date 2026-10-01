@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
 using ITensorBase: Index, name, names, rename, state
-using LinearAlgebra: Diagonal, inv, norm
+using LinearAlgebra: inv, norm
 using TensorAlgebra: matricize, unmatricize
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
@@ -102,6 +102,16 @@ function left_blocks(
     return blocks
 end
 
+# Corner `c[edge]` with `diagonal` on its diagonal and zeros elsewhere.
+function diagonal_corner(env::CTMEnvironment, edge, diagonal)
+    (row,), (column,) = corner_bonds(env, edge)
+    tensor = zeros(eltype(diagonal), (row, column))
+    for (k, value) in enumerate(diagonal)
+        tensor[row => k, column => k] = value
+    end
+    return tensor
+end
+
 # Inverse of `c[edge]` as a map between its two bonds, so that an edge tensor contracted
 # with `c[edge]` and then with this is unchanged.
 function inverse_corner(env::CTMEnvironment, edge)
@@ -142,8 +152,7 @@ function face_update!(
     ones_diagonal = ones(eltype(eigenvalues), bond_dim)
     for edge in face
         diagonal = edge == eigenvalue_edge(face) ? eigenvalues : ones_diagonal
-        env.corners[edge] =
-            unmatricize(Matrix(Diagonal(diagonal)), corner_bonds(env, edge)...)
+        env.corners[edge] = diagonal_corner(env, edge, diagonal)
     end
 
     right_projectors = right_blocks(tn, env, face, transfers, right_basis)
