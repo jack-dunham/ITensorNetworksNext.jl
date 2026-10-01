@@ -102,16 +102,6 @@ function left_blocks(
     return blocks
 end
 
-# Corner `c[edge]` with `diagonal` on its diagonal and zeros elsewhere.
-function diagonal_corner(env::CTMEnvironment, edge, diagonal)
-    (row,), (column,) = corner_bonds(env, edge)
-    tensor = zeros(eltype(diagonal), (row, column))
-    for (k, value) in enumerate(diagonal)
-        tensor[row => k, column => k] = value
-    end
-    return tensor
-end
-
 # Inverse of `c[edge]` as a map between its two bonds, so that an edge tensor contracted
 # with `c[edge]` and then with this is unchanged.
 function inverse_corner(env::CTMEnvironment, edge)
@@ -133,12 +123,6 @@ function face_update!(
         alg::AbstractAlgorithm
     )
     embedding = env.embedding
-    nedges = length(face)
-    if nedges < 3
-        throw(
-            ArgumentError("Face $face has $nedges edges; `face_update!` needs at least 3.")
-        )
-    end
 
     transfers = transfer_tensors(tn, env, face)
     product = CornerTransferProduct(collect(transfers), cut_inds(tn, env, last(face)))
@@ -146,13 +130,22 @@ function face_update!(
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
 
-    # The corners and projectors below read the new bonds from `env`. Every corner is the
-    # identity except the eigenvalue edge's, which holds the eigenvalues.
-    foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face)
-    ones_diagonal = ones(eltype(eigenvalues), bond_dim)
+    # A face's bonds are read off its corners, so all of them are replaced before the
+    # projectors read them. Every corner is the identity except the eigenvalue edge's.
+    new_bonds = Dictionary(face, [Index(bond_dim) for _ in face])
+
     for edge in face
-        diagonal = edge == eigenvalue_edge(face) ? eigenvalues : ones_diagonal
-        env.corners[edge] = diagonal_corner(env, edge, diagonal)
+        data = edge == eigenvalue_edge(face) ? eigenvalues : one.(eigenvalues)
+
+        row, column = new_bonds[edge], new_bonds[next_edge(embedding, edge)]
+
+        tensor = zeros(eltype(data), (row, column))
+
+        for (k, value) in enumerate(data)
+            tensor[row => k, column => k] = value
+        end
+
+        env.corners[edge] = tensor
     end
 
     right_projectors = right_blocks(tn, env, face, transfers, right_basis)
