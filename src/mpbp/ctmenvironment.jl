@@ -8,8 +8,6 @@ struct CTMEnvironment{V, B, E <: MessageCache, C <: MessageCache}
     edgetensors::E
     corners::C
     bonds::Dictionary{NamedEdge{V}, B}
-    # Previous subspace basis of each face, read by `face_update!(...; align = true)`.
-    gauges::Dict{Int, Any}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
@@ -19,7 +17,7 @@ bond(env::CTMEnvironment, edge) = env.bonds[NamedEdge(edge)]
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
         env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
-        copy(env.bonds), copy(env.gauges)
+        copy(env.bonds)
     )
 end
 
@@ -41,7 +39,7 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
         return ones(elt, (bonds[edge], bonds[next_edge(embedding, edge)]))
     end
 
-    return CTMEnvironment(embedding, edgetensors, corners, bonds, Dict{Int, Any}())
+    return CTMEnvironment(embedding, edgetensors, corners, bonds)
 end
 
 # A corner `c[w => v]` touches `w` and the far end of `next_edge(w => v)`.
