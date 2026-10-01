@@ -1,5 +1,5 @@
 using Dictionaries: Dictionary, set!
-using Graphs: dst, src
+using Graphs: AbstractEdge, dst, src
 using ITensorBase: Index, id, name, names, rename, state
 using LinearAlgebra: Diagonal, inv, norm
 using TensorAlgebra: matricize, unmatricize
@@ -30,32 +30,36 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
 end
 
 # Normalised transfer tensor at each edge of `face`.
-function transfer_tensors(tn, env::CTMEnvironment, face::Int)
-    face_edges = env.embedding.faces[face]
-    transfers = map(face_edges) do edge
+function transfer_tensors(tn, env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
+    transfers = map(face) do edge
         # `state` drops the operator pairing a `NormNetwork` vertex tensor carries.
         transfer = state(corner_transfer_matrix(tn, env, edge))
         return transfer / norm(transfer)
     end
-    return Dictionary(face_edges, transfers)
+    return Dictionary(face, transfers)
 end
 
 # The eigenvalue corner of a face sits between this edge and the face's last edge.
-eigenvalue_edge(face_edges) = face_edges[end - 1]
+eigenvalue_edge(face) = face[end - 1]
 
 # Right projector at each edge of `face`, carried backwards from `right_basis` at the last
 # edge; the one at an edge has that edge's cut and the bond of the face edge before it.
-function right_blocks(tn, env::CTMEnvironment, face::Int, transfers, right_basis)
+function right_blocks(
+        tn,
+        env::CTMEnvironment,
+        face::AbstractVector{<:AbstractEdge},
+        transfers,
+        right_basis
+    )
     embedding = env.embedding
-    face_edges = embedding.faces[face]
-    last_edge = last(face_edges)
+    last_edge = last(face)
     bond_before(edge) = bond(env, prev_edge(embedding, edge))
 
     blocks = Dictionary(
         [last_edge],
         [unmatricize(right_basis, cut_inds(tn, env, last_edge), (bond_before(last_edge),))]
     )
-    for edge in reverse(face_edges[2:end])
+    for edge in reverse(face[2:end])
         previous = prev_edge(embedding, edge)
         block = transfers[edge] * blocks[edge]
         set!(blocks, previous, rename(block, bond_before(edge) => bond_before(previous)))
@@ -65,11 +69,16 @@ end
 
 # Left projector at each edge of `face`, carried forwards from `left_basis` at the last edge
 # and divided by the face's eigenvalue corner; it has the bond of the face edge after it.
-function left_blocks(tn, env::CTMEnvironment, face::Int, transfers, left_basis)
+function left_blocks(
+        tn,
+        env::CTMEnvironment,
+        face::AbstractVector{<:AbstractEdge},
+        transfers,
+        left_basis
+    )
     embedding = env.embedding
-    face_edges = embedding.faces[face]
-    last_edge = last(face_edges)
-    divided_edge = eigenvalue_edge(face_edges)
+    last_edge = last(face)
+    divided_edge = eigenvalue_edge(face)
     bond_after(edge) = bond(env, next_edge(embedding, edge))
 
     blocks = Dictionary(
@@ -81,7 +90,7 @@ function left_blocks(tn, env::CTMEnvironment, face::Int, transfers, left_basis)
             ),
         ]
     )
-    for edge in face_edges[1:(end - 1)]
+    for edge in face[1:(end - 1)]
         block = blocks[prev_edge(embedding, edge)] * transfers[edge]
         block = if edge == divided_edge
             inverse_corner(env, divided_edge) * block
@@ -103,19 +112,18 @@ end
 """
     face_update!(env, tn, face; maxdim, alg) -> env
 
-Replace the corners, bonds and edge tensors of `face` with the MP-BP solution of the face
-given the rest of `env`.
+Replace the corners, bonds and edge tensors of `face`, given as its cycle of directed edges,
+with the MP-BP solution of the face given the rest of `env`.
 """
 function face_update!(
         env::CTMEnvironment,
         tn,
-        face::Int;
+        face::AbstractVector{<:AbstractEdge};
         maxdim::Integer,
         alg::AbstractAlgorithm
     )
     embedding = env.embedding
-    face_edges = embedding.faces[face]
-    nedges = length(face_edges)
+    nedges = length(face)
     if nedges < 3
         throw(
             ArgumentError("Face $face has $nedges edges; `face_update!` needs at least 3.")
@@ -123,18 +131,18 @@ function face_update!(
     end
 
     transfers = transfer_tensors(tn, env, face)
-    product = CornerTransferProduct(collect(transfers), cut_inds(tn, env, last(face_edges)))
+    product = CornerTransferProduct(collect(transfers), cut_inds(tn, env, last(face)))
 
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
     eigenvalue_corner = Matrix(Diagonal(eigenvalues))
 
     # The corners and projectors below take the face's new bonds from `env`.
-    foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face_edges)
+    foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face)
     elt = promote_type(eltype(right_basis), eltype(left_basis), eltype(eigenvalue_corner))
-    for edge in face_edges
+    for edge in face
         bonds = ((bond(env, edge),), (bond(env, next_edge(embedding, edge)),))
-        env.corners[edge] = if edge == eigenvalue_edge(face_edges)
+        env.corners[edge] = if edge == eigenvalue_edge(face)
             unmatricize(Matrix{elt}(eigenvalue_corner), bonds...)
         else
             id(elt, bonds...)
@@ -143,7 +151,7 @@ function face_update!(
 
     right_projectors = right_blocks(tn, env, face, transfers, right_basis)
     left_projectors = left_blocks(tn, env, face, transfers, left_basis)
-    for edge in face_edges
+    for edge in face
         reversed = reverse(edge)
         env.edgetensors[reversed] = right_projectors[edge] * inverse_corner(env, reversed)
         env.edgetensors[edge] =
