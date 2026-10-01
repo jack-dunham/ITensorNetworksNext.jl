@@ -11,6 +11,11 @@ end
 
 function invariant_subspace end
 
+struct InvariantSubspaceProblem{Operator} <: AI.Problem
+    matrix::Operator
+    maxdim::Int
+end
+
 function default_algorithm(::typeof(invariant_subspace), ::Type{<:Tuple}; kwargs...)
     return DenseEig(; kwargs...)
 end
@@ -107,15 +112,48 @@ Dominant invariant subspace of `matrix`: `matrix * right_basis ≈ right_basis *
 Eigenvalues of equal modulus are kept or dropped together.
 """
 function invariant_subspace(alg::DenseEig, matrix, maxdim::Integer)
+    return AI.solve(InvariantSubspaceProblem(matrix, maxdim), DenseEigensolve(alg))
+end
+
+# One dense eigendecomposition, run as a single step; the iterate is the kept
+# `(right_basis, left_basis, eigenvalues)` once the step has run.
+struct DenseEigensolve <: AI.Algorithm
+    dense_eig::DenseEig
+    stopping_criterion::AI.StopAfterIteration
+end
+DenseEigensolve(dense_eig::DenseEig) = DenseEigensolve(dense_eig, AI.StopAfterIteration(1))
+
+@kwdef mutable struct DenseEigensolveState{StoppingCriterionState} <: AI.State
+    iterate = nothing
+    iteration::Int = 0
+    stopping_criterion_state::StoppingCriterionState
+end
+
+function AI.initialize_state(
+        problem::InvariantSubspaceProblem, algorithm::DenseEigensolve; kwargs...
+    )
+    stopping_criterion_state = AI.initialize_state(
+        problem, algorithm, algorithm.stopping_criterion
+    )
+    return DenseEigensolveState(; stopping_criterion_state)
+end
+
+function AI.step!(
+        problem::InvariantSubspaceProblem, algorithm::DenseEigensolve,
+        state::DenseEigensolveState
+    )
+    (; matrix, maxdim) = problem
     dense = Matrix(matrix)
     decomposition = eigen(dense)
     order = sortperm(abs.(decomposition.values); rev = true)
     eigenvalues, eigenvectors = decomposition.values[order], decomposition.vectors[:, order]
-    nkept = kept_count(alg, eigenvalues, maxdim)
+    nkept = kept_count(algorithm.dense_eig, eigenvalues, maxdim)
 
     right_basis = eigenvectors[:, 1:nkept]
     left_rows = left_invariant_rows(dense, eigenvalues, nkept)
-    return right_basis, (left_rows * right_basis) \ left_rows, eigenvalues[1:nkept]
+    state.iterate =
+        (right_basis, (left_rows * right_basis) \ left_rows, eigenvalues[1:nkept])
+    return state
 end
 
 """
@@ -138,11 +176,6 @@ residual below `tol` on both sides, and throws after `maxiter` iterations otherw
 end
 
 orthonormal_columns(block) = Matrix(qr(block).Q)
-
-struct InvariantSubspaceProblem{Operator} <: AI.Problem
-    matrix::Operator
-    maxdim::Int
-end
 
 # Iterates `subspace_iteration`'s Rayleigh–Ritz step; the iterate is the (right, left) pair of
 # blocks, and `ritz` holds the kept Ritz pairs of the last step.
