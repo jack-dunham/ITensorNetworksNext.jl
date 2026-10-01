@@ -157,10 +157,9 @@ end
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
 
-function corner_transfer_matrix(tn, env::CTMEnvironment, face::Int, position::Int)
-    face_edges = env.embedding.faces[face]
-    incoming = face_edges[mod1(position - 1, length(face_edges))]
-    outgoing = face_edges[position]
+# Transfer matrix at `src(outgoing)` from the face edge before `outgoing` to `outgoing`.
+function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
+    incoming = prev_edge(env.embedding, outgoing)
     vertex = src(outgoing)
     exclude = (src(incoming), dst(outgoing))
 
@@ -218,7 +217,7 @@ function face_update!(
     end
 
     cut_indices = [cut_inds(tn, env, edge) for edge in face_edges]
-    transfer_tensors = [corner_transfer_matrix(tn, env, face, i) for i in 1:nedges]
+    transfer_tensors = [corner_transfer_matrix(tn, env, edge) for edge in face_edges]
     transfer_matrices = [
         matricize(
                 transfer_tensors[i] / norm(transfer_tensors[i]),
