@@ -1,18 +1,21 @@
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
-using ITensorBase: Index
+using ITensorBase: Index, commoninds
 using NamedGraphs: NamedEdge, all_edges
 
-struct CTMEnvironment{V, B, E <: MessageCache, C <: MessageCache}
+struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
     embedding::PlanarEmbedding{V}
     edgetensors::E
     corners::C
-    bonds::Dictionary{NamedEdge{V}, B}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 corner(env::CTMEnvironment, edge) = env.corners[NamedEdge(edge)]
-bond(env::CTMEnvironment, edge) = env.bonds[NamedEdge(edge)]
+# `c[edge]` and the corner before it in the same face share exactly the bond of `edge`.
+function bond(env::CTMEnvironment, edge)
+    previous = prev_edge(env.embedding, edge)
+    return only(commoninds(corner(env, edge), corner(env, previous)))
+end
 # The two bonds of `c[edge]`, as the (rows, columns) of the corner seen as a matrix.
 function corner_bonds(env::CTMEnvironment, edge)
     return (bond(env, edge),), (bond(env, next_edge(env.embedding, edge)),)
@@ -20,8 +23,7 @@ end
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
-        env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
-        copy(env.bonds)
+        env.embedding, map(identity, env.edgetensors), map(identity, env.corners)
     )
 end
 
@@ -43,7 +45,7 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
         return ones(elt, (bonds[edge], bonds[next_edge(embedding, edge)]))
     end
 
-    return CTMEnvironment(embedding, edgetensors, corners, bonds)
+    return CTMEnvironment(embedding, edgetensors, corners)
 end
 
 # A corner `c[w => v]` touches `w` and the far end of `next_edge(w => v)`.
