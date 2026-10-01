@@ -33,8 +33,8 @@ end
 # largest, whose scale drifts between sweeps without changing Z_B.
 function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
     return maximum(env1.embedding.faces; init = 0.0) do face
-        spectrum1 = corner_spectrum(env1, face[end - 1])
-        spectrum2 = corner_spectrum(env2, face[end - 1])
+        spectrum1 = corner_spectrum(env1, eigenvalue_edge(face))
+        spectrum2 = corner_spectrum(env2, eigenvalue_edge(face))
         length(spectrum1) == length(spectrum2) || return Inf
         return norm(spectrum1 / last(spectrum1) - spectrum2 / last(spectrum2))
     end
