@@ -1,10 +1,10 @@
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, NamedTensor, inds, name
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
-using ITensorNetworksNext: DenseEig, ITensorNetwork, SubspaceIteration, TransferProduct,
-    beliefpropagation, bethe_free_entropy, contract_network, ctm_environment, ctmrg, expect,
-    face_update!, hexagonal_position, invariant_subspace, leftface, linkinds, normnetwork,
-    planar_embedding, tensornetwork, vertex_scalar
+using ITensorNetworksNext: CornerTransferProduct, DenseEig, ITensorNetwork,
+    SubspaceIteration, beliefpropagation, bethe_free_entropy, contract_network,
+    ctm_environment, ctmrg, expect, face_update!, hexagonal_position, invariant_subspace,
+    leftface, linkinds, normnetwork, planar_embedding, tensornetwork, vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using Random: Xoshiro
@@ -57,9 +57,9 @@ const LATTICES = (
         @test length(λ) == 2
     end
 
-    @testset "`SubspaceIteration` on a `TransferProduct` matches `DenseEig`" begin
+    @testset "`SubspaceIteration` on a `CornerTransferProduct` matches `DenseEig`" begin
         A, B = randn(Xoshiro(3), 40, 40), randn(Xoshiro(4), 40, 40)
-        product = TransferProduct([A, B, transpose(A)])
+        product = CornerTransferProduct([A, B, transpose(A)])
         VR, VL, λ = invariant_subspace(DenseEig(), product, 5)
         VR′, VL′, λ′ = invariant_subspace(SubspaceIteration(), product, 5)
         @test length(λ′) == length(λ)

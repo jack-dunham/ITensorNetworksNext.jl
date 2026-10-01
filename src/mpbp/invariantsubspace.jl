@@ -16,49 +16,53 @@ function default_algorithm(::typeof(invariant_subspace), ::Type{<:Tuple}; kwargs
 end
 
 """
-    TransferProduct(matrices)
-    TransferProduct(tensors, cut)
+    CornerTransferProduct(matrices)
+    CornerTransferProduct(tensors, cut)
 
 The product `factors[1] * factors[2] * ⋯`, held unformed. Multiplying it by a block from
 either side applies the factors one at a time. Named `tensors` are contracted over the cuts
 they share and the product maps `cut` to itself; a block's rows or columns then run over `cut`.
 """
-struct TransferProduct{F, C <: Tuple}
+struct CornerTransferProduct{F, C <: Tuple}
     factors::Vector{F}
     cut::C
 end
-TransferProduct(matrices::Vector{<:AbstractMatrix}) = TransferProduct(matrices, ())
+function CornerTransferProduct(matrices::Vector{<:AbstractMatrix})
+    return CornerTransferProduct(matrices, ())
+end
 
-const MatrixTransferProduct = TransferProduct{<:AbstractMatrix}
-const NamedTransferProduct = TransferProduct{<:AbstractNamedTensor}
+const MatrixCornerTransferProduct = CornerTransferProduct{<:AbstractMatrix}
+const NamedCornerTransferProduct = CornerTransferProduct{<:AbstractNamedTensor}
 
-Base.eltype(product::TransferProduct) = mapreduce(eltype, promote_type, product.factors)
+function Base.eltype(product::CornerTransferProduct)
+    return mapreduce(eltype, promote_type, product.factors)
+end
 
-function Base.size(product::MatrixTransferProduct, dim::Integer)
+function Base.size(product::MatrixCornerTransferProduct, dim::Integer)
     return size(dim == 1 ? first(product.factors) : last(product.factors), dim)
 end
-Base.Matrix(product::MatrixTransferProduct) = foldl(*, product.factors)
-function Base.:*(product::MatrixTransferProduct, block::AbstractMatrix)
+Base.Matrix(product::MatrixCornerTransferProduct) = foldl(*, product.factors)
+function Base.:*(product::MatrixCornerTransferProduct, block::AbstractMatrix)
     return foldr(*, product.factors; init = block)
 end
-function Base.:*(block::AbstractMatrix, product::MatrixTransferProduct)
+function Base.:*(block::AbstractMatrix, product::MatrixCornerTransferProduct)
     return foldl(*, product.factors; init = block)
 end
 
-Base.size(product::NamedTransferProduct, dim::Integer) = prod(length, product.cut)
-function Base.Matrix(product::NamedTransferProduct)
+Base.size(product::NamedCornerTransferProduct, dim::Integer) = prod(length, product.cut)
+function Base.Matrix(product::NamedCornerTransferProduct)
     # The first factor's copy of `cut` is renamed, so the last factor does not contract with it.
     output = map(index -> Index(length(index)), product.cut)
     first_factor = rename(first(product.factors), (product.cut .=> output)...)
     closed = foldl(*, product.factors[2:end]; init = first_factor)
     return matricize(closed, output, product.cut)
 end
-function Base.:*(product::NamedTransferProduct, block::AbstractMatrix)
+function Base.:*(product::NamedCornerTransferProduct, block::AbstractMatrix)
     column = Index(size(block, 2))
     named_block = unmatricize(block, product.cut, (column,))
     return matricize(foldr(*, product.factors; init = named_block), product.cut, (column,))
 end
-function Base.:*(block::AbstractMatrix, product::NamedTransferProduct)
+function Base.:*(block::AbstractMatrix, product::NamedCornerTransferProduct)
     row = Index(size(block, 1))
     named_block = unmatricize(block, (row,), product.cut)
     return matricize(foldl(*, product.factors; init = named_block), (row,), product.cut)
@@ -119,7 +123,7 @@ end
 
 Two-sided block subspace iteration with `maxdim + oversampling` vectors, started from random
 blocks drawn with `seed`. It reads `matrix` only through `matrix * block` and `block * matrix`,
-so `matrix` can be a `TransferProduct`. It stops once the kept Ritz pairs have relative
+so `matrix` can be a `CornerTransferProduct`. It stops once the kept Ritz pairs have relative
 residual below `tol` on both sides, and throws after `maxiter` iterations otherwise.
 """
 @kwdef struct SubspaceIteration <: AbstractAlgorithm

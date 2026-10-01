@@ -133,7 +133,7 @@ function face_update!(
     end
 
     transfers = transfer_tensors(tn, env, face)
-    product = TransferProduct(collect(transfers), cut_inds(tn, env, last(face_edges)))
+    product = CornerTransferProduct(collect(transfers), cut_inds(tn, env, last(face_edges)))
 
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
