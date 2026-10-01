@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
-using ITensorBase: Index, id, name, names, rename, state
+using ITensorBase: Index, name, names, rename, state
 using LinearAlgebra: Diagonal, inv, norm
 using TensorAlgebra: matricize, unmatricize
 
@@ -105,8 +105,8 @@ end
 # Inverse of `c[edge]` as a map between its two bonds, so that an edge tensor contracted
 # with `c[edge]` and then with this is unchanged.
 function inverse_corner(env::CTMEnvironment, edge)
-    a, b = bond(env, edge), bond(env, next_edge(env.embedding, edge))
-    return unmatricize(inv(matricize(corner(env, edge), (a,), (b,))), (b,), (a,))
+    rows, columns = corner_bonds(env, edge)
+    return unmatricize(inv(matricize(corner(env, edge), rows, columns)), columns, rows)
 end
 
 """
@@ -135,18 +135,15 @@ function face_update!(
 
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
-    eigenvalue_corner = Matrix(Diagonal(eigenvalues))
 
-    # The corners and projectors below take the face's new bonds from `env`.
+    # The corners and projectors below read the new bonds from `env`. Every corner is the
+    # identity except the eigenvalue edge's, which holds the eigenvalues.
     foreach(edge -> set!(env.bonds, edge, Index(bond_dim)), face)
-    elt = promote_type(eltype(right_basis), eltype(left_basis), eltype(eigenvalue_corner))
+    ones_diagonal = ones(eltype(eigenvalues), bond_dim)
     for edge in face
-        bonds = ((bond(env, edge),), (bond(env, next_edge(embedding, edge)),))
-        env.corners[edge] = if edge == eigenvalue_edge(face)
-            unmatricize(Matrix{elt}(eigenvalue_corner), bonds...)
-        else
-            id(elt, bonds...)
-        end
+        diagonal = edge == eigenvalue_edge(face) ? eigenvalues : ones_diagonal
+        env.corners[edge] =
+            unmatricize(Matrix(Diagonal(diagonal)), corner_bonds(env, edge)...)
     end
 
     right_projectors = right_blocks(tn, env, face, transfers, right_basis)

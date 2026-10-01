@@ -13,6 +13,10 @@ end
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 corner(env::CTMEnvironment, edge) = env.corners[NamedEdge(edge)]
 bond(env::CTMEnvironment, edge) = env.bonds[NamedEdge(edge)]
+# The two bonds of `c[edge]`, as the (rows, columns) of the corner seen as a matrix.
+function corner_bonds(env::CTMEnvironment, edge)
+    return (bond(env, edge),), (bond(env, next_edge(env.embedding, edge)),)
+end
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
