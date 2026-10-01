@@ -45,14 +45,14 @@ corner_spectrum(env, edge) = sort(abs.(eigvals(unnamed(corner(env, edge)))))
 
 MP-BP environment of `tn` from eig-CTMRG sweeps over the faces of `embedding`, started from the
 converged BP environment. `stopping_criterion` is required. `faces` is the sweep order over
-inner-face indices (default `eachindex(embedding.faces)`); `bp_stopping_criterion` (default
+the inner faces, each given as its cycle of directed edges (default `embedding.faces`); `bp_stopping_criterion` (default
 `(; maxiter = 100, tol = 1.0e-14)`) controls the initial BP run. Throws if the change over the
 last sweep is not below `tol`.
 """
 function ctmrg(
         tn, embedding::PlanarEmbedding; maxdim::Integer, stopping_criterion::NamedTuple,
         subspace_algorithm = nothing, messages = nothing,
-        faces = eachindex(embedding.faces),
+        faces = embedding.faces,
         bp_stopping_criterion = (; maxiter = 100, tol = 1.0e-14)
     )
     (; maxiter, tol) = stopping_criterion
