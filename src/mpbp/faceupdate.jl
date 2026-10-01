@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
-using ITensorBase: Index, name, names, rename, state
+using ITensorBase: Index, inds, name, names, rename, state
 using LinearAlgebra: inv, norm
 using TensorAlgebra: matricize, unmatricize
 
@@ -39,9 +39,6 @@ function transfer_tensors(tn, env::CTMEnvironment, face::AbstractVector{<:Abstra
     return Dictionary(face, transfers)
 end
 
-# The eigenvalue corner of a face sits between this edge and the face's last edge.
-eigenvalue_edge(face) = face[end - 1]
-
 # Right projector at each edge of `face`, carried backwards from `right_basis` at the last
 # edge; the one at an edge has that edge's cut and the bond of the face edge before it.
 function right_blocks(
@@ -78,7 +75,7 @@ function left_blocks(
     )
     embedding = env.embedding
     last_edge = last(face)
-    divided_edge = eigenvalue_edge(face)
+    divided_edge = face[end - 1]
     bond_after(edge) = bond(env, next_edge(embedding, edge))
 
     blocks = Dictionary(
@@ -93,7 +90,7 @@ function left_blocks(
     for edge in face[1:(end - 1)]
         block = blocks[prev_edge(embedding, edge)] * transfers[edge]
         block = if edge == divided_edge
-            inverse_corner(env, divided_edge) * block
+            inverse(corner(env, divided_edge)) * block
         else
             rename(block, bond(env, edge) => bond_after(edge))
         end
@@ -102,11 +99,11 @@ function left_blocks(
     return blocks
 end
 
-# Inverse of `c[edge]` as a map between its two bonds, so that an edge tensor contracted
-# with `c[edge]` and then with this is unchanged.
-function inverse_corner(env::CTMEnvironment, edge)
-    rows, columns = corner_bonds(env, edge)
-    return unmatricize(inv(matricize(corner(env, edge), rows, columns)), columns, rows)
+# Inverse of a two-index `tensor` as a map between its indices, so contracting a tensor with
+# `tensor` and then with this leaves it unchanged.
+function inverse(tensor)
+    rows, columns = inds(tensor)
+    return unmatricize(inv(matricize(tensor, (rows,), (columns,))), (columns,), (rows,))
 end
 
 """
@@ -135,7 +132,7 @@ function face_update!(
     new_bonds = Dictionary(face, [Index(bond_dim) for _ in face])
 
     for edge in face
-        data = edge == eigenvalue_edge(face) ? eigenvalues : one.(eigenvalues)
+        data = edge == face[end - 1] ? eigenvalues : one.(eigenvalues)
 
         row, column = new_bonds[edge], new_bonds[next_edge(embedding, edge)]
 
@@ -152,9 +149,9 @@ function face_update!(
     left_projectors = left_blocks(tn, env, face, transfers, left_basis)
     for edge in face
         reversed = reverse(edge)
-        env.edgetensors[reversed] = right_projectors[edge] * inverse_corner(env, reversed)
-        env.edgetensors[edge] =
-            left_projectors[edge] * inverse_corner(env, prev_edge(embedding, reversed))
+        previous = prev_edge(embedding, reversed)
+        env.edgetensors[reversed] = right_projectors[edge] * inverse(corner(env, reversed))
+        env.edgetensors[edge] = left_projectors[edge] * inverse(corner(env, previous))
     end
     return env
 end
