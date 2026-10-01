@@ -1,12 +1,12 @@
 module ITensorNetworksNextTensorOperationsExt
 
 using Graphs: src
-using ITensorBase: ITensorBase, AbstractNamedTensor, ITensor, inds, inputnames, mulopadd!,
-    names, outputnames, rename, state, unnamed
+using ITensorBase: ITensorBase, ITensor, inds, inputnames, mulopadd!, names, outputnames,
+    rename, state, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, AbstractBilinearFormNetwork,
     BlockedMessageUpdate, NormGramian, QuadraticFormGramian, braname, default_nblocks,
     incoming_messages, kettensor, operatortensor, updated_message
-using TensorAlgebra: TensorAlgebra as TA, TensorOperationsContract
+using TensorAlgebra: TensorOperationsContract
 using TensorOperations: TensorOperations as TO
 
 # The allocator `alg` contracts with, which the intermediates must also come from.
@@ -36,13 +36,6 @@ function ITensorNetworksNext.default_nblocks(
     )
     return max(clamp(fld(ketbytes, 4 * 2^20), 1, 16), cld(χ, 64))
 end
-
-# The algorithm for the steps whose outputs are freed with `tensorfree!`, which `BufferAllocator`
-# only serves from its buffer when the allocation is marked temporary.
-function temporary_alg(alg::TensorOperationsContract)
-    return TensorOperationsContract(alg.backend, alg.allocator, true)
-end
-temporary_alg(alg) = alg
 
 # The ket and the tensors each block contracts into its slice in turn, checked before any
 # contraction runs.
@@ -94,11 +87,30 @@ function checked_tensors(algorithm, ket, rest)
     return ket, rest
 end
 
-# `TensorAlgebra.contract` on named tensors, matching dimensions by name: `alg` selects the kernel
-# and, for `TensorOperationsContract`, the allocator of the output. Named `*` takes no algorithm.
-function prod_tensors(a1::AbstractNamedTensor, a2::AbstractNamedTensor; kwargs...)
-    a, labels = TA.contract(unnamed(a1), names(a1), unnamed(a2), names(a2); kwargs...)
-    return ITensor(a, labels)
+# `y = x * xs...` contracted left to right with `alg`, conjugating the operands flagged in
+# `conjlist`. As in `TensorOperations.ncon`, every intermediate is allocated as a temporary of
+# `alg`'s allocator and freed once consumed, and the allocator is reset after `y` is written.
+function prod_tensors!(y, x, xs...; alg, conjlist = falses(length(xs) + 1))
+    allocator = contract_allocator(alg)
+    checkpoint = TO.allocator_checkpoint!(allocator)
+    op(i) = conjlist[i] ? conj : identity
+    opx = op(1)
+    for (i, m) in enumerate(Base.front(xs))
+        labels = Tuple(symdiff(names(x), names(m)))
+        pA, pB, pAB = TO.contract_indices(Tuple(names(x)), Tuple(names(m)), labels)
+        z = TO.tensoralloc_contract(
+            TO.promote_contract(eltype(x), eltype(m)), unnamed(x), pA, opx === conj,
+            unnamed(m), pB, conjlist[i + 1], pAB, Val(true), allocator
+        )
+        z = ITensor(z, labels)
+        mulopadd!(z, opx, x, op(i + 1), m, true, false; alg)
+        i > 1 && TO.tensorfree!(unnamed(x), allocator)
+        x, opx = z, identity
+    end
+    mulopadd!(y, opx, x, op(length(xs) + 1), last(xs), true, false; alg)
+    length(xs) > 1 && TO.tensorfree!(unnamed(x), allocator)
+    TO.allocator_reset!(allocator, checkpoint)
+    return y
 end
 
 function ITensorNetworksNext.updated_message(
@@ -118,31 +130,17 @@ function ITensorNetworksNext.updated_message(
 
     nblocks = min(default_nblocks(algorithm, unnamed(ket), χ), χ)
 
-    contract_alg = algorithm.contract_alg
-    allocator = contract_allocator(contract_alg)
-    step_alg = temporary_alg(contract_alg)
-
     # The message being replaced has the output's indices, bra copy then ket leg.
     T = promote_type(eltype(ket), map(eltype, rest)...)
     out = similar(ket, T, Tuple(inds(state(cache[edge]))))
+    conjlist = [falses(length(rest) + 1); true]
 
     for block in 1:nblocks
         cols = (fld((block - 1) * χ, nblocks) + 1):fld(block * χ, nblocks)
-        checkpoint = TO.allocator_checkpoint!(allocator)
-        slice = view(ket, ketdimname => cols)
-        x = slice
-        for m in rest
-            y = prod_tensors(x, m; alg = step_alg)
-            x === slice || TO.tensorfree!(unnamed(x), allocator)
-            # `x` is now bound to y, an object allocated via `allocator`.
-            x = y
-        end
-        mulopadd!(
-            view(out, ketdimname => cols), conj, bra, identity, x, true, false;
-            alg = contract_alg
+        prod_tensors!(
+            view(out, ketdimname => cols), view(ket, ketdimname => cols), rest..., bra;
+            alg = algorithm.contract_alg, conjlist
         )
-        x === slice || TO.tensorfree!(unnamed(x), allocator)
-        TO.allocator_reset!(allocator, checkpoint)
     end
     return out
 end
