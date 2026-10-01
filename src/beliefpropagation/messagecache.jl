@@ -1,7 +1,7 @@
 using DataGraphs: DataGraphs, AbstractDataGraph, AbstractEdgeDataGraph, edge_data,
     edge_data_type, set_vertex_data!, underlying_graph, underlying_graph_type, vertex_data,
     vertex_data_type
-using Dictionaries: Dictionary, set!, unset!
+using Dictionaries: Dictionary, Indices, set!, unset!
 using Graphs: AbstractGraph, connected_components, is_directed, is_tree
 using ITensorBase: state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
@@ -100,6 +100,12 @@ end
 
 Dictionaries.issettable(::MessageCache) = true
 Dictionaries.isinsertable(::MessageCache) = true
+
+# The messages on `edges`, in that order, as a DataGraphs view of the cache's edge data; writes
+# to an existing edge go through to the cache.
+function Base.view(cache::MessageCache, edges::AbstractVector{<:AbstractEdge})
+    return view(cache, Indices(edges))
+end
 
 function Base.map(f, cache::MessageCache)
     new_cache = similar_graph(cache, Base.promote_op(f, valtype(cache)))
