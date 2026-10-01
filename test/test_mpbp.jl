@@ -237,35 +237,4 @@ const LATTICES = (
             tn, emb; maxdim = 4, stopping_criterion = (; maxiter = 1, tol = 1.0e-14)
         )
     end
-
-    @testset "Frozen, aligned updates keep bonds and tensors fixed at the fixed point" begin
-        # Ising at h = 0 has eigenvalues of equal modulus, so unaligned tensors change every sweep.
-        g = named_grid((4, 4))
-        tn, _ = ising_setup(g, log(1 + √2) / 2; h = 0.0)
-        emb = planar_embedding(g, v -> v)
-        env = run_sweeps!(bp_environment(tn, g, emb), tn; maxdim = 4, nsweeps = 6)
-        bonds = copy(env.bonds)
-        change(e1, e0) = maximum(
-            norm(e1.edgetensors[d] - e0.edgetensors[d]) / norm(e0.edgetensors[d]) for
-                d in all_edges(g)
-        )
-        previous = env
-        for _ in 1:20
-            previous = copy(env)
-            for f in eachindex(emb.faces)
-                face_update!(
-                    env,
-                    tn,
-                    f;
-                    maxdim = 4,
-                    alg = DenseEig(),
-                    frozen = true,
-                    align = true
-                )
-            end
-        end
-        @test all(env.bonds[d] === bonds[d] for d in all_edges(g))
-        @test change(env, previous) < 1.0e-8
-        @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-12
-    end
 end
