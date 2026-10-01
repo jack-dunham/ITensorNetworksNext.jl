@@ -99,7 +99,7 @@ const LATTICES = (
         rng = StableRNG(1)
         d = first(
             Iterators.filter(
-                d -> all(!iszero, (leftface(emb, d), leftface(emb, reverse(d)))),
+                d -> all(!isnothing, (leftface(emb, d), leftface(emb, reverse(d)))),
                 all_edges(g)
             )
         )

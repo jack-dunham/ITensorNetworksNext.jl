@@ -6,7 +6,8 @@ struct PlanarEmbedding{V, G <: AbstractGraph}
     graph::G
     rotation::Dictionary{V, Vector{V}}
     faces::Vector{Vector{NamedEdge{V}}}
-    leftface::Dictionary{NamedEdge{V}, Int}
+    # The face to the left of each directed edge, or `nothing` for the outer face.
+    leftface::Dictionary{NamedEdge{V}, Union{Nothing, Vector{NamedEdge{V}}}}
 end
 
 function _next_edge(rotation, edge)
@@ -52,7 +53,7 @@ function planar_embedding(graph::AbstractGraph, position)
     end
 
     faces = Vector{NamedEdge{V}}[]
-    leftface = Dictionary{NamedEdge{V}, Int}()
+    leftface = Dictionary{NamedEdge{V}, Union{Nothing, Vector{NamedEdge{V}}}}()
     nouter = 0
     for undirected in edges(graph),
             start in (NamedEdge{V}(undirected), reverse(NamedEdge{V}(undirected)))
@@ -66,10 +67,10 @@ function planar_embedding(graph::AbstractGraph, position)
 
         if _signed_area(position, cycle) < 0
             nouter += 1
-            foreach(edge -> set!(leftface, edge, 0), cycle)
+            foreach(edge -> set!(leftface, edge, nothing), cycle)
         else
             push!(faces, cycle)
-            foreach(edge -> set!(leftface, edge, length(faces)), cycle)
+            foreach(edge -> set!(leftface, edge, cycle), cycle)
         end
     end
 
