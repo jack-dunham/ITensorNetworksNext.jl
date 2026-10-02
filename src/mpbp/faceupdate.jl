@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
-using ITensorBase: Index, inds, name, names, rename, state
-using LinearAlgebra: inv, norm, opnorm
+using ITensorBase: Index, inds, name, names, state
+using LinearAlgebra: Diagonal, inv, norm, opnorm
 using TensorAlgebra: matricize, unmatricize
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
@@ -40,7 +40,7 @@ function transfer_tensors(tn, env::CTMEnvironment, face::AbstractVector{<:Abstra
 end
 
 # Right projector at each edge of `face`, carried backwards from `right_basis` at the last
-# edge; the one at an edge has that edge's cut and the bond of the face edge before it.
+# edge and divided by a corner at each step; it has the bond of the face edge before it.
 function right_blocks(
         tn,
         env::CTMEnvironment,
@@ -59,13 +59,13 @@ function right_blocks(
     for edge in reverse(face[2:end])
         previous = prev_edge(embedding, edge)
         block = transfers[edge] * blocks[edge]
-        set!(blocks, previous, rename(block, bond_before(edge) => bond_before(previous)))
+        set!(blocks, previous, block * inverse(corner(env, prev_edge(embedding, previous))))
     end
     return blocks
 end
 
 # Left projector at each edge of `face`, carried forwards from `left_basis` at the last edge
-# and divided by the face's eigenvalue corner; it has the bond of the face edge after it.
+# and divided by a corner at each step; it has the bond of the face edge after it.
 function left_blocks(
         tn,
         env::CTMEnvironment,
@@ -75,7 +75,6 @@ function left_blocks(
     )
     embedding = env.embedding
     last_edge = last(face)
-    divided_edge = face[end - 1]
     bond_after(edge) = bond(env, next_edge(embedding, edge))
 
     blocks = Dictionary(
@@ -89,12 +88,7 @@ function left_blocks(
     )
     for edge in face[1:(end - 1)]
         block = blocks[prev_edge(embedding, edge)] * transfers[edge]
-        block = if edge == divided_edge
-            inverse(corner(env, divided_edge)) * block
-        else
-            rename(block, bond(env, edge) => bond_after(edge))
-        end
-        set!(blocks, edge, block)
+        set!(blocks, edge, inverse(corner(env, edge)) * block)
     end
     return blocks
 end
@@ -126,33 +120,42 @@ function face_update!(
 
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
-    # Ill-conditioned eigenvalue corners or projectors make the inverses below inaccurate.
+    # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
+    # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
+    m = length(face)
+    roots = if all(value -> isreal(value) && real(value) > 0, eigenvalues)
+        real.(eigenvalues) .^ (1 / m)
+    else
+        complex.(eigenvalues) .^ (1 / m)
+    end
+    # Ill-conditioned corners or projectors make the inverses below inaccurate.
     @debug(
         "face_update!", face, bond_dim,
-        corner_condition = maximum(abs, eigenvalues) / minimum(abs, eigenvalues),
+        corner_condition = maximum(abs, roots) / minimum(abs, roots),
         projector_condition = opnorm(left_basis) * opnorm(right_basis),
     )
 
     # A face's bonds are read off its corners, so all of them are replaced before the
-    # projectors read them. Every corner is the identity except the eigenvalue edge's.
+    # projectors read them.
     new_bonds = Dictionary(face, [Index(bond_dim) for _ in face])
 
     for edge in face
-        data = edge == face[end - 1] ? eigenvalues : one.(eigenvalues)
-
         row, column = new_bonds[edge], new_bonds[next_edge(embedding, edge)]
 
-        tensor = zeros(eltype(data), (row, column))
+        tensor = zeros(eltype(roots), (row, column))
 
-        for (k, value) in enumerate(data)
+        for (k, value) in enumerate(roots)
             tensor[row => k, column => k] = value
         end
 
         env.corners[edge] = tensor
     end
 
-    right_projectors = right_blocks(tn, env, face, transfers, right_basis)
-    left_projectors = left_blocks(tn, env, face, transfers, left_basis)
+    # The bases are rescaled so that each pass divides by one corner per step.
+    right_projectors =
+        right_blocks(tn, env, face, transfers, right_basis * Diagonal(eigenvalues ./ roots))
+    left_projectors =
+        left_blocks(tn, env, face, transfers, Diagonal(inv.(roots)) * left_basis)
     for edge in face
         reversed = reverse(edge)
         previous = prev_edge(embedding, reversed)

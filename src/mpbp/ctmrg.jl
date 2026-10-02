@@ -1,7 +1,7 @@
 using AlgorithmsInterface: AlgorithmsInterface as AI
-using ITensorBase: unnamed
 using LinearAlgebra: eigvals, norm
 using NamedGraphs: all_edges
+using TensorAlgebra: matricize
 
 default_ctmrg_messages(tn) = Dict(e => ones(Tuple(linkinds(tn, e))) for e in all_edges(tn))
 default_ctmrg_messages(nn::NormNetwork) = message_environment(one, nn)
@@ -25,17 +25,24 @@ function AIE.update!(update::FaceUpdate, env, problem::CTMRGProblem, face)
     )
 end
 
-# Change in the eigenvalues of each face's eigenvalue corner `c[d_{m-1}]`, divided by the
-# largest, whose scale drifts between sweeps without changing Z_B.
+# Change in the eigenvalues of each face's product of corners, divided by the largest, whose
+# scale drifts between sweeps without changing Z_B.
 function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
     return maximum(env1.embedding.faces; init = 0.0) do face
-        spectrum1 = corner_spectrum(env1, face[end - 1])
-        spectrum2 = corner_spectrum(env2, face[end - 1])
+        spectrum1 = face_spectrum(env1, face)
+        spectrum2 = face_spectrum(env2, face)
         length(spectrum1) == length(spectrum2) || return Inf
         return norm(spectrum1 / last(spectrum1) - spectrum2 / last(spectrum2))
     end
 end
-corner_spectrum(env, edge) = sort(abs.(eigvals(unnamed(corner(env, edge)))))
+# Moduli of the eigenvalues of the product of `face`'s corners, which no bond gauge changes.
+function face_spectrum(env, face)
+    matrices = map(face) do edge
+        next = next_edge(env.embedding, edge)
+        return matricize(corner(env, edge), (bond(env, edge),), (bond(env, next),))
+    end
+    return sort(abs.(eigvals(prod(matrices))))
+end
 
 """
     ctmrg(
