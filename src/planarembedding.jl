@@ -91,6 +91,23 @@ function prev_edge(embedding::PlanarEmbedding, edge)
 end
 leftface(embedding::PlanarEmbedding, edge) = embedding.leftface[NamedEdge(edge)]
 
+"""
+    face_coloring(embedding) -> Dictionary
+
+A colour for each inner face of `embedding`, from `1`, such that faces sharing a vertex differ.
+Faces of one colour neither read nor write each other's tensors in a face update, so updating
+the colours in turn, with all faces of a colour at once, gives a sweep in colour order.
+"""
+function face_coloring(embedding::PlanarEmbedding)
+    vertex_sets = [Set(src.(face)) for face in embedding.faces]
+    colors = Int[]
+    for (i, vertex_set) in enumerate(vertex_sets)
+        used = Set(colors[j] for j in 1:(i - 1) if !isdisjoint(vertex_set, vertex_sets[j]))
+        push!(colors, first(color for color in Iterators.countfrom(1) if color ∉ used))
+    end
+    return Dictionary(embedding.faces, colors)
+end
+
 # Coordinates matching NetworkX `hexagonal_lattice_graph`, whose node `(i, j)` is `(j + 1, i + 1)` here.
 function hexagonal_position((row, column))
     x_index, y_index = column - 1, row - 1

@@ -1,6 +1,6 @@
-using Graphs: edges, ne, nv
+using Graphs: edges, ne, nv, src
 using ITensorNetworksNext:
-    hexagonal_position, leftface, next_edge, planar_embedding, prev_edge
+    face_coloring, hexagonal_position, leftface, next_edge, planar_embedding, prev_edge
 using NamedGraphs: all_edges, named_grid, named_hexagonal_lattice_graph
 using Test: @test, @test_throws, @testset
 
@@ -27,7 +27,14 @@ using Test: @test, @test_throws, @testset
             edges(g)
         )
         @test 2 * interior + (ne(g) - interior) == sum(length, emb.faces)
+
+        coloring = face_coloring(emb)
+        @test all(
+            coloring[f1] != coloring[f2] for f1 in emb.faces, f2 in emb.faces if
+                f1 !== f2 && !isdisjoint(src.(f1), src.(f2))
+        )
     end
+    @test maximum(face_coloring(planar_embedding(named_grid((6, 6)), v -> v))) == 4
     @testset "one outer face required" begin
         g = named_grid((2, 2))
         @test_throws ArgumentError planar_embedding(g, v -> (0.0, 0.0))
