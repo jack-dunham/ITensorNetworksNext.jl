@@ -1,7 +1,6 @@
 using AlgorithmsInterface: AlgorithmsInterface as AI
-using LinearAlgebra: eigvals, norm
+using LinearAlgebra: norm
 using NamedGraphs: all_edges
-using TensorAlgebra: matricize
 
 default_ctmrg_messages(tn) = Dict(e => ones(Tuple(linkinds(tn, e))) for e in all_edges(tn))
 default_ctmrg_messages(nn::NormNetwork) = message_environment(one, nn)
@@ -37,11 +36,8 @@ function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
 end
 # Moduli of the eigenvalues of the product of `face`'s corners, which no bond gauge changes.
 function face_spectrum(env, face)
-    matrices = map(face) do edge
-        next = next_edge(env.embedding, edge)
-        return matricize(corner(env, edge), (bond(env, edge),), (bond(env, next),))
-    end
-    return sort(abs.(eigvals(prod(matrices))))
+    diagonal = mapreduce(edge -> corner_diagonal(env, edge), (a, b) -> a .* b, face)
+    return sort(abs.(diagonal))
 end
 
 """
