@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
 using ITensorBase: Index, inds, name, names, state
-using LinearAlgebra: Diagonal, inv, norm, opnorm
+using LinearAlgebra: Diagonal, cond, inv, norm, opnorm
 using TensorAlgebra: matricize, unmatricize
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
@@ -100,11 +100,35 @@ function inverse(tensor)
     return unmatricize(inv(matricize(tensor, (rows,), (columns,))), (columns,), (rows,))
 end
 
+# Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
+# bases onto `previous` within blocks of equal eigenvalues, which leaves the corners diagonal.
+function align_bases(right_basis, left_basis, eigenvalues, previous)
+    size(previous) == size(right_basis) || return right_basis, left_basis, eigenvalues
+    overlaps = abs.(left_basis * previous)
+    order = Int[]
+    for column in axes(overlaps, 2)
+        candidates = setdiff(axes(overlaps, 1), order)
+        push!(order, candidates[argmax(overlaps[candidates, column])])
+    end
+    right_basis, left_basis = right_basis[:, order], left_basis[order, :]
+    eigenvalues = eigenvalues[order]
+
+    rotation = left_basis * previous
+    for i in axes(rotation, 1), j in axes(rotation, 2)
+        degenerate = abs(eigenvalues[i] - eigenvalues[j]) ≤ 1.0e-10 * abs(eigenvalues[i])
+        degenerate || (rotation[i, j] = 0)
+    end
+    # A near-singular rotation means the subspace has moved; aligning onto it would amplify noise.
+    cond(rotation) < 1.0e8 || return right_basis, left_basis, eigenvalues
+    return right_basis * rotation, rotation \ left_basis, eigenvalues
+end
+
 """
     face_update!(env, tn, face; maxdim, alg) -> env
 
 Replace the corners, bonds and edge tensors of `face`, given as its cycle of directed edges,
-with the MP-BP solution of the face given the rest of `env`.
+with the MP-BP solution of the face given the rest of `env`. The new subspace basis is aligned
+onto the one from the face's previous update, so the edge tensors converge entry by entry.
 """
 function face_update!(
         env::CTMEnvironment,
@@ -120,6 +144,11 @@ function face_update!(
 
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
+    if haskey(env.right_bases, face)
+        right_basis, left_basis, eigenvalues =
+            align_bases(right_basis, left_basis, eigenvalues, env.right_bases[face])
+    end
+    env.right_bases[face] = right_basis
     # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
     # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
     m = length(face)
