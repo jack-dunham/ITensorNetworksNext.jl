@@ -2,7 +2,7 @@ using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
 using ITensorBase: Index, inds, name, names, state
 using LinearAlgebra: Diagonal, cond, inv, norm, opnorm
-using TensorAlgebra: matricize, unmatricize
+using TensorAlgebra: unmatricize
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
 
@@ -93,11 +93,11 @@ function left_blocks(
     return blocks
 end
 
-# Inverse of a two-index `tensor` as a map between its indices, so contracting a tensor with
-# `tensor` and then with this leaves it unchanged.
+# Inverse of a diagonal two-index `tensor`, such as a corner, as a map between its indices.
 function inverse(tensor)
-    rows, columns = inds(tensor)
-    return unmatricize(inv(matricize(tensor, (rows,), (columns,))), (columns,), (rows,))
+    row, column = inds(tensor)
+    diagonal = [tensor[row => k, column => k] for k in 1:length(row)]
+    return diagonal_tensor(inv.(diagonal), row, column)
 end
 
 # Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
@@ -170,14 +170,7 @@ function face_update!(
 
     for edge in face
         row, column = new_bonds[edge], new_bonds[next_edge(embedding, edge)]
-
-        tensor = zeros(eltype(roots), (row, column))
-
-        for (k, value) in enumerate(roots)
-            tensor[row => k, column => k] = value
-        end
-
-        env.corners[edge] = tensor
+        env.corners[edge] = diagonal_tensor(roots, row, column)
     end
 
     # The bases are rescaled so that each pass divides by one corner per step.
