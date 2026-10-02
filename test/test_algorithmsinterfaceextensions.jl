@@ -4,7 +4,7 @@ using ITensorNetworksNext.AlgorithmsInterfaceExtensions:
 using Test: @test, @test_throws, @testset
 
 # Concrete `NestedAlgorithm` subtype: holds a flat list of child algorithms
-# and picks them by iteration index. Mirrors how `IterateUntilConverged`
+# and picks them by iteration index. Mirrors how `RepeatUntilStopped`
 # shapes itself on top of the minimal `AIE.NestedAlgorithm`.
 struct TestProblem <: AI.Problem end
 
@@ -149,9 +149,9 @@ end
         @test state.iterate ≈ [3.0, 3.0]
     end
 
-    @testset "IterateUntilConverged over a SweepAlgorithm with a custom NestedState" begin
+    @testset "RepeatUntilStopped over a SweepAlgorithm with a custom NestedState" begin
         problem = TestProblem()
-        algorithm = AIE.IterateUntilConverged(;
+        algorithm = AIE.RepeatUntilStopped(;
             subalgorithm = AIE.SweepAlgorithm(;
                 schedule = [1.0, 2.0, 3.0],
                 update = AddEntry()

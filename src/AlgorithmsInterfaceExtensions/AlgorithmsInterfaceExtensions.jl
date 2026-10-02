@@ -107,17 +107,17 @@ function AI.step!(problem::AI.Problem, algorithm::SweepAlgorithm, state::SweepSt
     return state
 end
 
-# ============================ IterateUntilConverged =======================================
+# ============================ RepeatUntilStopped ==========================================
 
 # Repeats `subalgorithm` on the same problem until `stopping_criterion` is met.
-@kwdef struct IterateUntilConverged{
+@kwdef struct RepeatUntilStopped{
         Subalgorithm <: AI.Algorithm, StoppingCriterion <: AI.StoppingCriterion,
     } <: NestedAlgorithm
     subalgorithm::Subalgorithm
     stopping_criterion::StoppingCriterion
 end
 
-@kwdef mutable struct IterateUntilConvergedState{
+@kwdef mutable struct RepeatUntilStoppedState{
         Substate <: AI.State, StoppingCriterionState <: AI.StoppingCriterionState,
     } <: NestedState
     substate::Substate
@@ -126,19 +126,19 @@ end
 end
 
 function AI.initialize_state(
-        problem::AI.Problem, algorithm::IterateUntilConverged; iterate, iteration::Int = 0
+        problem::AI.Problem, algorithm::RepeatUntilStopped; iterate, iteration::Int = 0
     )
     substate = AI.initialize_state(problem, algorithm.subalgorithm; iterate)
     stopping_criterion_state = AI.initialize_state(
         problem, algorithm, algorithm.stopping_criterion; iterate
     )
-    return IterateUntilConvergedState(; substate, iteration, stopping_criterion_state)
+    return RepeatUntilStoppedState(; substate, iteration, stopping_criterion_state)
 end
 
 # Accepts any `NestedState`, so a state type that adds fields (e.g. for MPI termination)
 # needs no methods of its own.
 function AI.initialize_state!(
-        problem::AI.Problem, algorithm::IterateUntilConverged, state::NestedState;
+        problem::AI.Problem, algorithm::RepeatUntilStopped, state::NestedState;
         iteration::Int = 0
     )
     state.iteration = iteration
@@ -149,7 +149,7 @@ function AI.initialize_state!(
 end
 
 function initialize_subsolve(
-        problem::AI.Problem, algorithm::IterateUntilConverged, state::NestedState
+        problem::AI.Problem, algorithm::RepeatUntilStopped, state::NestedState
     )
     return problem, algorithm.subalgorithm, state.substate
 end

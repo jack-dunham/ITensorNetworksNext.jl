@@ -1,5 +1,5 @@
 using .AlgorithmsInterfaceExtensions: AlgorithmsInterfaceExtensions as AIE,
-    IterateUntilConverged, StopWhenConverged, SweepAlgorithm, iterate_diff
+    RepeatUntilStopped, StopWhenConverged, SweepAlgorithm, iterate_diff
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using DataGraphs: edge_data
 using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
@@ -74,7 +74,7 @@ end
 """
     beliefpropagation_algorithm(
         factors, cache; edges, stopping_criterion, message_update_algorithm
-    ) -> IterateUntilConverged
+    ) -> RepeatUntilStopped
 
 The algorithm [`beliefpropagation`](@ref) runs on `factors` and the `MessageCache` `cache`,
 built from the same keyword arguments.
@@ -93,7 +93,7 @@ function beliefpropagation_algorithm(
     )
     sweep = SweepAlgorithm(; schedule = edges, update = message_update_algorithm)
     stopping_criterion = select_beliefpropagation_stopping_criterion(stopping_criterion)
-    return IterateUntilConverged(; subalgorithm = sweep, stopping_criterion)
+    return RepeatUntilStopped(; subalgorithm = sweep, stopping_criterion)
 end
 
 struct BeliefPropagationProblem{Factors} <: AI.Problem

@@ -192,7 +192,7 @@ applied since belief propagation last ran. The second form builds `algorithm` wi
 `stopping_criterion`; `apply_operators(...; environment_alg = (; when, kwargs...))` uses it.
 """
 struct BeliefPropagationEnvironmentPreparation{
-        When <: AI.StoppingCriterion, Algorithm <: IterateUntilConverged,
+        When <: AI.StoppingCriterion, Algorithm <: RepeatUntilStopped,
     } <: AbstractAlgorithm
     when::When
     algorithm::Algorithm
