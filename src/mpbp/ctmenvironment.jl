@@ -7,6 +7,8 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
     embedding::PlanarEmbedding{V}
     edgetensors::E
     corners::C
+    # Each face's right basis from its last update, onto which `face_update!` aligns the next.
+    right_bases::Dict{Vector{NamedEdge{V}}, AbstractMatrix}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
@@ -19,7 +21,8 @@ end
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
-        env.embedding, map(identity, env.edgetensors), map(identity, env.corners)
+        env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
+        copy(env.right_bases)
     )
 end
 
@@ -41,7 +44,9 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
         return ones(elt, (bonds[edge], bonds[next_edge(embedding, edge)]))
     end
 
-    return CTMEnvironment(embedding, edgetensors, corners)
+    return CTMEnvironment(
+        embedding, edgetensors, corners, Dict{eltype(embedding.faces), AbstractMatrix}()
+    )
 end
 
 # A corner `c[w => v]` touches `w` and the far end of `next_edge(w => v)`.
