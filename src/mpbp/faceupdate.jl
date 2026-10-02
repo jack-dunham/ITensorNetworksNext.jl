@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
 using ITensorBase: Index, inds, name, names, rename, state
-using LinearAlgebra: inv, norm
+using LinearAlgebra: inv, norm, opnorm
 using TensorAlgebra: matricize, unmatricize
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
@@ -126,6 +126,12 @@ function face_update!(
 
     right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
     bond_dim = length(eigenvalues)
+    # Ill-conditioned eigenvalue corners or projectors make the inverses below inaccurate.
+    @debug(
+        "face_update!", face, bond_dim,
+        corner_condition = maximum(abs, eigenvalues) / minimum(abs, eigenvalues),
+        projector_condition = opnorm(left_basis) * opnorm(right_basis),
+    )
 
     # A face's bonds are read off its corners, so all of them are replaced before the
     # projectors read them. Every corner is the identity except the eigenvalue edge's.
