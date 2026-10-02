@@ -1,10 +1,11 @@
 using Graphs: dst, edges, src, vertices
-using ITensorBase: Index, NamedTensor, inds, name
+using ITensorBase: Index, NamedTensor, align, inds, name, unnamed
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: CornerTransferProduct, DenseEig, ITensorNetwork,
-    SubspaceIteration, beliefpropagation, bethe_free_entropy, contract_network,
+    SubspaceIteration, beliefpropagation, bethe_free_entropy, bond, contract_network,
     ctm_environment, ctmrg, expect, face_update!, hexagonal_position, invariant_subspace,
-    leftface, linkinds, normnetwork, planar_embedding, tensornetwork, vertex_scalar
+    leftface, linkinds, next_edge, normnetwork, planar_embedding, prev_edge, tensornetwork,
+    vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using Random: Xoshiro
@@ -227,6 +228,35 @@ const LATTICES = (
         emb = planar_embedding(g, v -> v)
         env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
         @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-12
+    end
+
+    @testset "Edge tensors converge entry by entry at h = 0" begin
+        # Ising at h = 0 has degenerate eigenvalues, so unaligned bases change every sweep.
+        g = named_grid((4, 4))
+        tn, _ = ising_setup(g, log(1 + √2) / 2; h = 0.0)
+        emb = planar_embedding(g, v -> v)
+        env = bp_environment(tn, g, emb)
+        alg = DenseEig(; rtol = 1.0e-9)
+        sweep!() =
+            for face in emb.faces
+            face_update!(env, tn, face; maxdim = 4, alg)
+        end
+        # Legs in a fixed order, since every update makes new bond indices.
+        function edge_array(d)
+            legs = (
+                linkinds(tn, d)..., bond(env, next_edge(emb, d)),
+                bond(env, prev_edge(emb, reverse(d))),
+            )
+            return unnamed(align(env.edgetensors[d], name.(legs)))
+        end
+        foreach(_ -> sweep!(), 1:30)
+        before = Dict(d => edge_array(d) for d in all_edges(g))
+        sweep!()
+        @test maximum(
+            d -> norm(edge_array(d) - before[d]) / norm(before[d]),
+            all_edges(g)
+        ) <
+            1.0e-6
     end
 
     @testset "Unconverged run throws" begin
