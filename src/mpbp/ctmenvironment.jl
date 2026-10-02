@@ -19,6 +19,21 @@ function bond(env::CTMEnvironment, edge)
     return only(commoninds(corner(env, edge), corner(env, previous)))
 end
 
+# Two-index tensor over `row` and `column` with `diagonal` on its diagonal; every corner is one.
+function diagonal_tensor(diagonal, row, column)
+    tensor = zeros(eltype(diagonal), (row, column))
+    for (k, value) in enumerate(diagonal)
+        tensor[row => k, column => k] = value
+    end
+    return tensor
+end
+
+function corner_diagonal(env::CTMEnvironment, edge)
+    row, column = bond(env, edge), bond(env, next_edge(env.embedding, edge))
+    tensor = corner(env, edge)
+    return [tensor[row => k, column => k] for k in 1:length(row)]
+end
+
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
         env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
