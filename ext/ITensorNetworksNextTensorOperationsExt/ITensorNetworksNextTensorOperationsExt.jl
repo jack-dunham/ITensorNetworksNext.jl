@@ -87,9 +87,8 @@ function checked_tensors(algorithm, ket, rest)
     return ket, rest
 end
 
-# `y = x * xs...` contracted left to right with `alg`, conjugating the operands flagged in
-# `conjlist`. As in `TensorOperations.ncon`, every intermediate is allocated as a temporary of
-# `alg`'s allocator and freed once consumed, and the allocator is reset after `y` is written.
+# `y = x * xs...` left to right with `alg`, conjugating the operands flagged in `conjlist`.
+# As in `TO.ncon`, each intermediate is an allocator temporary, freed once the next step reads it.
 function prod_tensors!(y, x, xs...; alg, conjlist = falses(length(xs) + 1))
     allocator = contract_allocator(alg)
     checkpoint = TO.allocator_checkpoint!(allocator)
