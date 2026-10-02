@@ -69,7 +69,7 @@ function ctmrg(
         schedule = faces,
         update = FaceUpdate(; maxdim, subspace_algorithm = alg)
     )
-    algorithm = IterateUntilConverged(;
+    algorithm = RepeatUntilStopped(;
         subalgorithm = sweep,
         stopping_criterion = AI.StopAfterIteration(maxiter) | StopWhenConverged(; tol)
     )
