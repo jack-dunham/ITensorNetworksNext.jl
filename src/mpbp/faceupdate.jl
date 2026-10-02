@@ -165,8 +165,11 @@ function face_update!(
     )
 
     # A face's bonds are read off its corners, so all of them are replaced before the
-    # projectors read them.
-    new_bonds = Dictionary(face, [Index(bond_dim) for _ in face])
+    # projectors read them. A bond keeps its index while its dimension is unchanged.
+    new_bonds = map(Dictionary(face, face)) do edge
+        old_bond = bond(env, edge)
+        return length(old_bond) == bond_dim ? old_bond : Index(bond_dim)
+    end
 
     for edge in face
         row, column = new_bonds[edge], new_bonds[next_edge(embedding, edge)]
