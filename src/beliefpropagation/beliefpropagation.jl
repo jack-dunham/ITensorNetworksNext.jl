@@ -6,6 +6,7 @@ using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
 using ITensorBase: AbstractITensor, operator, state
 using LinearAlgebra: norm, normalize, tr
 using NamedGraphs: forest_cover_edge_sequence, subgraph
+using TensorAlgebra: TensorOperationsContract
 
 # === Top-level user entry point ===
 
@@ -258,11 +259,13 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors, edge)
     return cache
 end
 
-# `NormNetwork`: the message is a doubled (ket/bra) bond operator. Contracting a plain vertex factor
-# with the incoming messages leaves the surviving bond legs dangling, so assign the bra/ket pairing
-# the norm network gives this edge (the same convention as `similar_message_environment`), in which
-# the message is positive semidefinite and its trace is a positive normalization.
-function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
+# Bilinear-form network: the message is a doubled (ket/bra) bond operator. Contracting a plain
+# vertex factor with the incoming messages leaves the surviving bond legs dangling, so assign the
+# bra/ket pairing the network gives this edge (the same convention as `similar_message_environment`).
+# On a `NormNetwork` the message is positive semidefinite and its trace is a positive normalization.
+function bilinearform_message_update!(
+        algorithm, cache, factors::AbstractBilinearFormNetwork, edge
+    )
     new_tensor = updated_message(algorithm, cache, factors, edge)
     branames = linknames(branetwork(factors), edge)
     ketnames = linknames(ketnetwork(factors), edge)
@@ -273,6 +276,60 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNet
     end
     cache[edge] = new_message
     return cache
+end
+
+function message_update!(
+        algorithm::SimpleMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
+end
+
+"""
+    BlockedMessageUpdate(; normalize = true, nblocks = nothing, workspace_limit = nothing,
+                           contract_alg = TensorOperationsContract())
+
+Message update for a `NormNetwork` or a `QuadraticFormNetwork` that splits the outgoing ket leg of each message into `nblocks`
+column blocks of near-equal length, so each intermediate is about `1 / nblocks` of the ket. An
+`nblocks` larger than the leg's length gives one column per block, and `nblocks = nothing` chooses
+it per message from the contraction backend and the ket's size. Requires TensorOperations to be
+loaded. Every contraction runs with `contract_alg`, and intermediates are allocated and freed
+through its allocator. `workspace_limit` is reserved and must be `nothing`.
+"""
+@kwdef struct BlockedMessageUpdate{ContractAlg} <: MessageUpdateAlgorithm
+    normalize::Bool = true
+    nblocks::Union{Nothing, Int} = nothing
+    workspace_limit::Nothing = nothing
+    contract_alg::ContractAlg = TensorOperationsContract()
+    function BlockedMessageUpdate(normalize, nblocks, workspace_limit, contract_alg)
+        isnothing(nblocks) || nblocks isa Integer && nblocks > 0 ||
+            throw(
+            ArgumentError(
+                "`nblocks` must be `nothing` or a positive integer, got $nblocks."
+            )
+        )
+        isnothing(workspace_limit) || throw(
+            ArgumentError("`workspace_limit` is not supported yet and must be `nothing`.")
+        )
+        return new{typeof(contract_alg)}(normalize, nblocks, workspace_limit, contract_alg)
+    end
+end
+
+"""
+    default_nblocks(algorithm::BlockedMessageUpdate, ket::AbstractArray, χ::Integer) -> Int
+    default_nblocks(backend, ketbytes::Integer, χ::Integer) -> Int
+
+The number of column blocks `algorithm` splits a leg of length `χ` of the ket array `ket` into;
+the kernel caps it at `χ`. The first form returns `algorithm.nblocks` when it is set; for `nothing` it finds the
+TensorOperations backend `algorithm.contract_alg` contracts with and calls the second, which a
+backend overloads. Defined by the TensorOperations extension: 1 (the whole leg) by default, and on
+cuTENSOR about 16 blocks, each at least 4 MiB and at most 64 columns.
+"""
+function default_nblocks end
+
+function message_update!(
+        algorithm::BlockedMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
 end
 
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===

@@ -5,13 +5,13 @@ using GradedArrays: U1, gradedrange, isdual
 using Graphs: AbstractGraph, add_vertex!, dst, edges, has_edge, has_vertex, ne, nv,
     rem_edge!, src, vertices
 using ITensorBase:
-    Greedy, ITensor, Index, apply, inds, name, noprime, outputnames, prime, state
+    Greedy, ITensor, Index, apply, inds, name, noprime, operator, outputnames, prime, state
 using ITensorNetworksNext: ITensorNetworksNext, Exact, ITensorNetwork, MessageCache,
-    NormNetwork, SimpleMessageUpdate, StopWhenConverged, beliefpropagation,
-    bethe_free_energy, bethe_free_entropy, bratensor, contract_network, contraction_order,
-    edge_scalar, edge_scalars, incoming_messages, insertlink!, kettensor, linkaxes,
-    linkinds, message_environment, messagecache, region_scalar, subgraph, tensornetwork,
-    updated_message, vertex_scalar, vertex_scalars
+    NormNetwork, QuadraticFormNetwork, SimpleMessageUpdate, StopWhenConverged,
+    beliefpropagation, bethe_free_energy, bethe_free_entropy, bratensor, contract_network,
+    contraction_order, edge_scalar, edge_scalars, incoming_messages, insertlink!, kettensor,
+    linkaxes, linkinds, message_environment, messagecache, region_scalar, subgraph,
+    tensornetwork, updated_message, vertex_scalar, vertex_scalars
 using LinearAlgebra: LinearAlgebra, norm, tr
 using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree, named_grid,
     named_path_graph, vertextype
@@ -349,6 +349,30 @@ end
                     eps(real(T))^(1 / 3)
             end
         end
+    end
+
+    @testset "QuadraticFormNetwork, T=$T" for T in (Float64, ComplexF64)
+        rng = StableRNG(123)
+        g = named_path_graph(4)
+        s = Dict(v => Index(2) for v in vertices(g))
+        network = tensornetwork(v -> randn(rng, T, (s[v],)), vertices(g))
+        for edge in edges(g)
+            insertlink!(network, edge)
+        end
+        out = Dict(v => Index(2) for v in vertices(g))
+        ops = tensornetwork(v -> randn(rng, T, (out[v], s[v])), vertices(g))
+        vs = collect(vertices(g))
+        op = operator(ops, [name(out[v]) for v in vs], [name(s[v]) for v in vs])
+        qf = QuadraticFormNetwork(network, op)
+
+        cache = beliefpropagation(
+            qf, message_environment(one, qf); stopping_criterion = (; maxiter = 10)
+        )
+        @test all(msg -> !isempty(outputnames(msg)), edge_data(cache))
+
+        # Belief propagation is exact on a tree, including around an operator layer.
+        z_exact = contract_network([qf[v] for v in vertices(qf)])[]
+        @test exp(bethe_free_entropy(qf, cache)) ≈ z_exact rtol = eps(real(T))^(1 / 3)
     end
 
     @testset "Doubled-vertex contraction operands" begin
