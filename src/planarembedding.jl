@@ -8,6 +8,9 @@ struct PlanarEmbedding{V, G <: AbstractGraph}
     faces::Vector{Vector{NamedEdge{V}}}
     # The face to the left of each directed edge, or `nothing` for the outer face.
     leftface::Dictionary{NamedEdge{V}, Union{Nothing, Vector{NamedEdge{V}}}}
+    # The next and previous directed edge around the face to the left of each directed edge.
+    next::Dictionary{NamedEdge{V}, NamedEdge{V}}
+    prev::Dictionary{NamedEdge{V}, NamedEdge{V}}
 end
 
 function _next_edge(rotation, edge)
@@ -16,14 +19,6 @@ function _next_edge(rotation, edge)
     around = rotation[target]
     position = findfirst(==(source), around)
     return NamedEdge(target => around[mod1(position - 1, length(around))])
-end
-
-function _prev_edge(rotation, edge)
-    source, target = src(edge), dst(edge)
-
-    around = rotation[source]
-    position = findfirst(==(target), around)
-    return NamedEdge(around[mod1(position + 1, length(around))] => source)
 end
 
 function _signed_area(position, cycle)
@@ -54,6 +49,8 @@ function planar_embedding(graph::AbstractGraph, position)
 
     faces = Vector{NamedEdge{V}}[]
     leftface = Dictionary{NamedEdge{V}, Union{Nothing, Vector{NamedEdge{V}}}}()
+    next_edges = Dictionary{NamedEdge{V}, NamedEdge{V}}()
+    prev_edges = Dictionary{NamedEdge{V}, NamedEdge{V}}()
     nouter = 0
     for undirected in edges(graph),
             start in (NamedEdge{V}(undirected), reverse(NamedEdge{V}(undirected)))
@@ -63,6 +60,10 @@ function planar_embedding(graph::AbstractGraph, position)
         cycle = [start]
         while (next = _next_edge(rotation, last(cycle))) != start
             push!(cycle, next)
+        end
+        for (edge, following) in zip(cycle, circshift(cycle, -1))
+            set!(next_edges, edge, following)
+            set!(prev_edges, following, edge)
         end
 
         if _signed_area(position, cycle) < 0
@@ -80,15 +81,13 @@ function planar_embedding(graph::AbstractGraph, position)
         )
     )
 
-    return PlanarEmbedding{V, typeof(graph)}(graph, rotation, faces, leftface)
+    return PlanarEmbedding{V, typeof(graph)}(
+        graph, rotation, faces, leftface, next_edges, prev_edges
+    )
 end
 
-function next_edge(embedding::PlanarEmbedding, edge)
-    return _next_edge(embedding.rotation, NamedEdge(edge))
-end
-function prev_edge(embedding::PlanarEmbedding, edge)
-    return _prev_edge(embedding.rotation, NamedEdge(edge))
-end
+next_edge(embedding::PlanarEmbedding, edge) = embedding.next[NamedEdge(edge)]
+prev_edge(embedding::PlanarEmbedding, edge) = embedding.prev[NamedEdge(edge)]
 leftface(embedding::PlanarEmbedding, edge) = embedding.leftface[NamedEdge(edge)]
 
 """
