@@ -64,15 +64,27 @@ an explicit `AlgorithmsInterface.StoppingCriterion`.
 `message_update_algorithm` controls how a single message is recomputed
 from its incoming neighbours.
 """
-function beliefpropagation(
-        factors, messages;
+function beliefpropagation(factors, messages; kwargs...)
+    problem = BeliefPropagationProblem(factors)
+    cache = MessageCache(messages)
+    algorithm = beliefpropagation_algorithm(factors, cache; kwargs...)
+    return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
+end
+
+"""
+    beliefpropagation_algorithm(
+        factors, cache; edges, stopping_criterion, message_update_algorithm
+    ) -> BeliefPropagationAlgorithm
+
+The algorithm [`beliefpropagation`](@ref) runs on `factors` and the `MessageCache` `cache`,
+built from the same keyword arguments.
+"""
+function beliefpropagation_algorithm(
+        factors, cache;
         edges = default_beliefpropagation_edges(factors),
         stopping_criterion = nothing,
         message_update_algorithm = nothing
     )
-    problem = BeliefPropagationProblem(factors)
-    cache = MessageCache(messages)
-
     # No concrete `edge` value here, so the args tuple uses `edgetype(factors)`.
     message_update_algorithm = select_algorithm(
         message_update!,
@@ -84,9 +96,7 @@ function beliefpropagation(
         stopping_criterion = AI.StopAfterIteration(length(edges))
     )
     stopping_criterion = select_beliefpropagation_stopping_criterion(stopping_criterion)
-    algorithm = BeliefPropagationAlgorithm(; edges, subalgorithm, stopping_criterion)
-
-    return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
+    return BeliefPropagationAlgorithm(; edges, subalgorithm, stopping_criterion)
 end
 
 # === Layer 1: BP outer loop (iterative) ===
