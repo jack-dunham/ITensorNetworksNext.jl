@@ -16,7 +16,7 @@ edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 corner(env::CTMEnvironment, edge) = env.corners[NamedEdge(edge)]
 # `c[edge]` and the corner before it in the same face share exactly the bond of `edge`.
 function bond(env::CTMEnvironment, edge)
-    previous = prev_edge(env.embedding, edge)
+    previous = prevedge(env.embedding, edge)
     return only(commoninds(corner(env, edge), corner(env, previous)))
 end
 
@@ -30,7 +30,7 @@ function diagonal_tensor(diagonal, row, column)
 end
 
 function corner_diagonal(env::CTMEnvironment, edge)
-    row, column = bond(env, edge), bond(env, next_edge(env.embedding, edge))
+    row, column = bond(env, edge), bond(env, nextedge(env.embedding, edge))
     tensor = corner(env, edge)
     return [tensor[row => k, column => k] for k in 1:length(row)]
 end
@@ -53,11 +53,11 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     elt = eltype(messages[first(embedding_edges)])
 
     edgetensors = messagecache(embedding_edges) do edge
-        return messages[edge] * ones(elt, (bonds[next_edge(embedding, edge)],)) *
-            ones(elt, (bonds[prev_edge(embedding, reverse(edge))],))
+        return messages[edge] * ones(elt, (bonds[nextedge(embedding, edge)],)) *
+            ones(elt, (bonds[prevedge(embedding, reverse(edge))],))
     end
     corners = messagecache(embedding_edges) do edge
-        return ones(elt, (bonds[edge], bonds[next_edge(embedding, edge)]))
+        return ones(elt, (bonds[edge], bonds[nextedge(embedding, edge)]))
     end
 
     return CTMEnvironment(
@@ -66,7 +66,7 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     )
 end
 
-# A corner `c[w => v]` touches `w` and the far end of `next_edge(w => v)`.
+# A corner `c[w => v]` touches `w` and the far end of `nextedge(w => v)`.
 function environment_tensors(env::CTMEnvironment, vertex; exclude = ())
     embedding = env.embedding
     incoming = [
@@ -78,7 +78,7 @@ function environment_tensors(env::CTMEnvironment, vertex; exclude = ())
         [edgetensor(env, edge) for edge in incoming];
         [
             corner(env, edge) for
-                edge in incoming if dst(next_edge(embedding, edge)) ∉ exclude
+                edge in incoming if dst(nextedge(embedding, edge)) ∉ exclude
         ]
     ]
 end
@@ -89,8 +89,8 @@ function environment_tensors(env::CTMEnvironment, edge::Union{AbstractEdge, Pair
     backward = reverse(forward)
     return [
         edgetensor(env, forward), edgetensor(env, backward),
-        corner(env, forward), corner(env, prev_edge(embedding, forward)),
-        corner(env, backward), corner(env, prev_edge(embedding, backward)),
+        corner(env, forward), corner(env, prevedge(embedding, forward)),
+        corner(env, backward), corner(env, prevedge(embedding, backward)),
     ]
 end
 
