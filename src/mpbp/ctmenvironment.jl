@@ -9,7 +9,7 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
     corners::C
     # Each face's `(right_basis, left_basis)` from its last update, which the next one aligns
     # onto and `SubspaceIteration` starts from.
-    bases::Dict{Vector{NamedEdge{V}}, Tuple{AbstractMatrix, AbstractMatrix}}
+    bases::Dict{NamedFace{V}, Tuple{AbstractMatrix, AbstractMatrix}}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
@@ -94,8 +94,7 @@ function environment_tensors(env::CTMEnvironment, edge::Union{AbstractEdge, Pair
     ]
 end
 
-# A face is given as its cycle of directed edges.
-function environment_tensors(env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
+function environment_tensors(env::CTMEnvironment, face::NamedFace)
     return view(env.corners, face)
 end
 
