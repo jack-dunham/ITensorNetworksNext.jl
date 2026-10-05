@@ -1,6 +1,6 @@
-using Dictionaries: Dictionary, set!
-using Graphs: AbstractGraph, dst, edges, neighbors, src, vertices
-using NamedGraphs: NamedEdge
+using Dictionaries: Dictionary, Indices, set!
+using Graphs: AbstractGraph, dst, neighbors, src, vertices
+using NamedGraphs: NamedEdge, all_edges
 
 """
     NamedFace(edges)
@@ -21,7 +21,6 @@ Base.hash(face::NamedFace, h::UInt) = hash(first(face.edges), hash(:NamedFace, h
 
 struct PlanarEmbedding{V, G <: AbstractGraph}
     graph::G
-    rotation::Dictionary{V, Vector{V}}
     faces::Vector{NamedFace{V}}
     outer_face::NamedFace{V}
     # The face to the left of each directed edge, inner or outer, and the edge's position in it.
@@ -34,6 +33,15 @@ function _nextedge(rotation, edge)
     around = rotation[target]
     position = findfirst(==(source), around)
     return NamedEdge(target => around[mod1(position - 1, length(around))])
+end
+
+# The directed edges around the face to the left of `start`, beginning with `start`.
+function _face_cycle(rotation, start)
+    cycle = [start]
+    while (next = _nextedge(rotation, last(cycle))) != start
+        push!(cycle, next)
+    end
+    return cycle
 end
 
 function _signed_area(position, cycle)
@@ -51,34 +59,25 @@ must be connected and have no crossing edges; this is not checked.
 """
 function planar_embedding(graph::AbstractGraph, position)
     V = eltype(vertices(graph))
-    rotation = Dictionary{V, Vector{V}}()
-    for vertex in vertices(graph)
-        x, y = position(vertex)
-        around = collect(neighbors(graph, vertex))
-        sort!(
-            around;
-            by = neighbor -> atan(position(neighbor)[2] - y, position(neighbor)[1] - x)
-        )
-        set!(rotation, vertex, around)
+    function angle(vertex, neighbor)
+        (x1, y1), (x2, y2) = position(vertex), position(neighbor)
+        return atan(y2 - y1, x2 - x1)
+    end
+    # The neighbours of each vertex in counterclockwise order.
+    rotation = map(Indices(collect(vertices(graph)))) do vertex
+        return sort(collect(neighbors(graph, vertex)); by = neighbor -> angle(vertex, neighbor))
     end
 
     faces = NamedFace{V}[]
     outer_faces = NamedFace{V}[]
     positions = Dictionary{NamedEdge{V}, Tuple{NamedFace{V}, Int}}()
-    for undirected in edges(graph),
-            start in (NamedEdge{V}(undirected), reverse(NamedEdge{V}(undirected)))
-
+    for start in all_edges(graph)
         haskey(positions, start) && continue
-
-        cycle = [start]
-        while (next = _nextedge(rotation, last(cycle))) != start
-            push!(cycle, next)
-        end
-        face = NamedFace(cycle)
-        for (index, edge) in enumerate(cycle)
+        face = NamedFace(_face_cycle(rotation, start))
+        for (index, edge) in enumerate(face)
             set!(positions, edge, (face, index))
         end
-        push!(_signed_area(position, cycle) < 0 ? outer_faces : faces, face)
+        push!(_signed_area(position, face) < 0 ? outer_faces : faces, face)
     end
 
     length(outer_faces) == 1 || throw(
@@ -86,10 +85,7 @@ function planar_embedding(graph::AbstractGraph, position)
             "`position` gives $(length(outer_faces)) outer faces; a connected planar drawing has one."
         )
     )
-
-    return PlanarEmbedding{V, typeof(graph)}(
-        graph, rotation, faces, only(outer_faces), positions
-    )
+    return PlanarEmbedding{V, typeof(graph)}(graph, faces, only(outer_faces), positions)
 end
 
 function nextedge(embedding::PlanarEmbedding, edge)
