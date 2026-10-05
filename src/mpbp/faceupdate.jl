@@ -107,27 +107,15 @@ function align_bases(right_basis, left_basis, eigenvalues, previous)
 end
 
 """
-    FaceSolution
-
-What `face_solve` returns: the face's new `corners`, its `right_projectors` and
-`left_projectors` keyed by edge, and the aligned `right_basis` its next solve aligns onto.
-"""
-struct FaceSolution{Corners, Right, Left, Basis}
-    corners::Corners
-    right_projectors::Right
-    left_projectors::Left
-    right_basis::Basis
-end
-
-"""
     face_solve(embedding, face, transfers, cut, bonds; maxdim, alg, previous_basis = nothing)
-        -> FaceSolution
+        -> corners, projectors, right_basis
 
 Solve `face`, given as its cycle of directed edges, from its normalised corner transfer
 tensors `transfers` keyed by edge, the indices `cut` of the cut at its last edge, and its
 current bond indices `bonds`, which are kept while the bond dimension is unchanged. Reads no
 environment, so the transfer tensors can be computed by whichever ranks own the vertices.
-The new basis is aligned onto `previous_basis` when one is given.
+The new basis is aligned onto `previous_basis` when one is given. `projectors` holds the
+right and left projectors at each edge of the face.
 """
 function face_solve(
         embedding, face, transfers, cut, bonds;
@@ -172,32 +160,30 @@ function face_solve(
         embedding, face, transfers, corners, new_bonds, cut,
         Diagonal(inv.(roots)) * left_basis
     )
-    return FaceSolution(corners, right_projectors, left_projectors, right_basis)
+    return corners, (right_projectors, left_projectors), right_basis
 end
 
-# Writes the edge tensors of `face`'s edges, in both directions, for which `writes` holds. It
-# reads the neighbouring faces' corners, which must be those the transfer tensors were made with.
-function set_face_edge_tensors!(env::CTMEnvironment, face, solution; writes = Returns(true))
+# Writes the edge tensors of `face`'s edges in both directions. It reads the neighbouring
+# faces' corners, which must be those the transfer tensors were made with.
+function set_face_edge_tensors!(
+        env::CTMEnvironment,
+        face,
+        (right_projectors, left_projectors)
+    )
     for edge in face
         reversed = reverse(edge)
         previous = prev_edge(env.embedding, reversed)
-        if writes(reversed)
-            env.edgetensors[reversed] =
-                solution.right_projectors[edge] * inverse(corner(env, reversed))
-        end
-        if writes(edge)
-            env.edgetensors[edge] =
-                solution.left_projectors[edge] * inverse(corner(env, previous))
-        end
+        env.edgetensors[reversed] = right_projectors[edge] * inverse(corner(env, reversed))
+        env.edgetensors[edge] = left_projectors[edge] * inverse(corner(env, previous))
     end
     return env
 end
 
-function set_face_corners!(env::CTMEnvironment, face, solution)
+function set_face_corners!(env::CTMEnvironment, face, corners, right_basis)
     for edge in face
-        env.corners[edge] = solution.corners[edge]
+        env.corners[edge] = corners[edge]
     end
-    env.right_bases[face] = solution.right_basis
+    env.right_bases[face] = right_basis
     return env
 end
 
@@ -215,13 +201,13 @@ function face_update!(
         maxdim::Integer,
         alg::AbstractAlgorithm
     )
-    solution = face_solve(
+    corners, projectors, right_basis = face_solve(
         env.embedding, face, transfer_tensors(tn, env, face),
         cut_inds(tn, env, last(face)),
         Dictionary(face, [bond(env, edge) for edge in face]);
         maxdim, alg, previous_basis = get(env.right_bases, face, nothing)
     )
-    set_face_edge_tensors!(env, face, solution)
-    set_face_corners!(env, face, solution)
+    set_face_edge_tensors!(env, face, projectors)
+    set_face_corners!(env, face, corners, right_basis)
     return env
 end
