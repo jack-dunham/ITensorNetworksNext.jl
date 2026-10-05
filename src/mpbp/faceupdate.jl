@@ -51,7 +51,11 @@ function right_blocks(env::CTMEnvironment, face, transfers, cut, right_basis)
     for edge in reverse(face[2:end])
         previous = prevedge(embedding, edge)
         block = transfers[edge] * blocks[edge]
-        set!(blocks, previous, block * inverse(corner(env, prevedge(embedding, previous))))
+        set!(
+            blocks,
+            previous,
+            block * inverse(cornertensor(env, prevedge(embedding, previous)))
+        )
     end
     return blocks
 end
@@ -73,7 +77,7 @@ function left_blocks(env::CTMEnvironment, face, transfers, cut, left_basis)
     )
     for edge in face[1:(end - 1)]
         block = blocks[prevedge(embedding, edge)] * transfers[edge]
-        set!(blocks, edge, inverse(corner(env, edge)) * block)
+        set!(blocks, edge, inverse(cornertensor(env, edge)) * block)
     end
     return blocks
 end
@@ -158,8 +162,9 @@ function set_face_edge_tensors!(
     for edge in face
         reversed = reverse(edge)
         previous = prevedge(env.embedding, reversed)
-        env.edgetensors[reversed] = right_projectors[edge] * inverse(corner(env, reversed))
-        env.edgetensors[edge] = left_projectors[edge] * inverse(corner(env, previous))
+        env.edgetensors[reversed] =
+            right_projectors[edge] * inverse(cornertensor(env, reversed))
+        env.edgetensors[edge] = left_projectors[edge] * inverse(cornertensor(env, previous))
     end
     return env
 end
