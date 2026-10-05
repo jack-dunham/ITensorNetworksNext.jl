@@ -171,7 +171,7 @@ end
     count[] = 0
 
     @testset "StopWhenVertexRevisited matches explicit belief propagation" begin
-        environment_alg = BeliefPropagationEnvironmentPreparation(; bp_kwargs...)
+        environment_alg = bp_kwargs
         gated, gated_env = apply_operators(gates, network, env; environment_alg, trunc)
         # Gates 3, 5 and 7 each act on a vertex updated since belief propagation last ran.
         @test count[] == 3 * updates_per_run
@@ -201,14 +201,15 @@ end
 
     @testset "StopAfterIteration($k) runs belief propagation every $k gates" for k in 1:3
         when = AI.StopAfterIteration(k)
-        environment_alg = BeliefPropagationEnvironmentPreparation(; when, bp_kwargs...)
+        environment_alg = (; when, bp_kwargs...)
         apply_operators(gates, network, env; environment_alg, trunc)
         @test count[] == div(length(gates) - 1, k) * updates_per_run
         count[] = 0
     end
 
     @testset "converged messages name the bond shared with the vertex" begin
-        environment_alg = BeliefPropagationEnvironmentPreparation(; bp_kwargs...)
+        environment_alg =
+            BeliefPropagationEnvironmentPreparation(network, env; bp_kwargs...)
         gated, gated_env = apply_operators(gates[1:3], network, env; environment_alg, trunc)
         count[] = 0
         for edge in edges(gated_env)
