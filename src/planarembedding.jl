@@ -28,7 +28,7 @@ struct PlanarEmbedding{V, G <: AbstractGraph}
     positions::Dictionary{NamedEdge{V}, Tuple{NamedFace{V}, Int}}
 end
 
-function _next_edge(rotation, edge)
+function _nextedge(rotation, edge)
     source, target = src(edge), dst(edge)
 
     around = rotation[target]
@@ -71,7 +71,7 @@ function planar_embedding(graph::AbstractGraph, position)
         haskey(positions, start) && continue
 
         cycle = [start]
-        while (next = _next_edge(rotation, last(cycle))) != start
+        while (next = _nextedge(rotation, last(cycle))) != start
             push!(cycle, next)
         end
         face = NamedFace(cycle)
@@ -92,11 +92,11 @@ function planar_embedding(graph::AbstractGraph, position)
     )
 end
 
-function next_edge(embedding::PlanarEmbedding, edge)
+function nextedge(embedding::PlanarEmbedding, edge)
     face, index = embedding.positions[NamedEdge(edge)]
     return face[mod1(index + 1, length(face))]
 end
-function prev_edge(embedding::PlanarEmbedding, edge)
+function prevedge(embedding::PlanarEmbedding, edge)
     face, index = embedding.positions[NamedEdge(edge)]
     return face[mod1(index - 1, length(face))]
 end
