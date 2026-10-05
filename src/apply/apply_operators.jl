@@ -193,23 +193,41 @@ function default_algorithm(
 end
 
 """
-    BeliefPropagationEnvironmentPreparation(; when = StopWhenVertexRevisited(), kwargs...)
+    BeliefPropagationEnvironmentPreparation(; when = StopWhenVertexRevisited(), algorithm)
+    BeliefPropagationEnvironmentPreparation(network, env; when, kwargs...)
 
-Environment preparation that runs [`beliefpropagation`](@ref) on the environment before a
-gate whenever the stopping criterion `when` is met, counting only the gates applied since
-belief propagation last ran. `kwargs` are forwarded to `beliefpropagation` and must include
-its `stopping_criterion`.
+Environment preparation that runs the belief propagation `algorithm` on the environment
+before a gate whenever the stopping criterion `when` is met, counting only the gates
+applied since belief propagation last ran. The second form builds `algorithm` with
+[`beliefpropagation_algorithm`](@ref) from `kwargs`, which must include its
+`stopping_criterion`; `apply_operators(...; environment_alg = (; when, kwargs...))` uses it.
 """
 struct BeliefPropagationEnvironmentPreparation{
-        When <: AI.StoppingCriterion, Kwargs <: NamedTuple,
+        When <: AI.StoppingCriterion, Algorithm <: BeliefPropagationAlgorithm,
     } <: AbstractAlgorithm
     when::When
-    kwargs::Kwargs
+    algorithm::Algorithm
 end
 function BeliefPropagationEnvironmentPreparation(;
-        when = StopWhenVertexRevisited(), kwargs...
+        when = StopWhenVertexRevisited(), algorithm
     )
-    return BeliefPropagationEnvironmentPreparation(when, (; kwargs...))
+    return BeliefPropagationEnvironmentPreparation(when, algorithm)
+end
+function BeliefPropagationEnvironmentPreparation(
+        network, env; when = StopWhenVertexRevisited(), kwargs...
+    )
+    factors = message_normnetwork(network, env)
+    algorithm = beliefpropagation_algorithm(factors, MessageCache(env); kwargs...)
+    return BeliefPropagationEnvironmentPreparation(when, algorithm)
+end
+
+# Keyword arguments, from an `environment_alg` `NamedTuple`, select belief propagation.
+function default_algorithm(
+        ::typeof(apply_operator_environment_preparation), args::Tuple; kwargs...
+    )
+    isempty(kwargs) && return NoApplyOperatorEnvironmentPreparation()
+    _, _, _, network, env = args
+    return BeliefPropagationEnvironmentPreparation(network, env; kwargs...)
 end
 
 # `iteration` counts the gates applied since belief propagation last ran;
@@ -268,9 +286,9 @@ function environment_beliefpropagation(
         environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
         state
     )
-    return beliefpropagation(
-        message_normnetwork(state.iterate, state.env), state.env;
-        environment_algorithm.kwargs...
+    bp_problem = BeliefPropagationProblem(message_normnetwork(state.iterate, state.env))
+    return AI.solve(
+        bp_problem, environment_algorithm.algorithm; iterate = MessageCache(state.env)
     )
 end
 
