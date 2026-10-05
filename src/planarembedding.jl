@@ -2,12 +2,29 @@ using Dictionaries: Dictionary, set!
 using Graphs: AbstractGraph, dst, edges, neighbors, src, vertices
 using NamedGraphs: NamedEdge
 
+"""
+    NamedFace(edges)
+
+A face of a planar embedding as its counterclockwise cycle of directed `edges`. Each directed
+edge lies on exactly one face of an embedding, so two faces are equal when they start at the
+same edge; faces from different embeddings are not comparable.
+"""
+struct NamedFace{V} <: AbstractVector{NamedEdge{V}}
+    edges::Vector{NamedEdge{V}}
+end
+
+Base.size(face::NamedFace) = size(face.edges)
+Base.getindex(face::NamedFace, i::Int) = face.edges[i]
+Base.:(==)(face1::NamedFace, face2::NamedFace) = first(face1.edges) == first(face2.edges)
+Base.isequal(face1::NamedFace, face2::NamedFace) = face1 == face2
+Base.hash(face::NamedFace, h::UInt) = hash(first(face.edges), hash(:NamedFace, h))
+
 struct PlanarEmbedding{V, G <: AbstractGraph}
     graph::G
     rotation::Dictionary{V, Vector{V}}
-    faces::Vector{Vector{NamedEdge{V}}}
+    faces::Vector{NamedFace{V}}
     # The face to the left of each directed edge, or `nothing` for the outer face.
-    leftface::Dictionary{NamedEdge{V}, Union{Nothing, Vector{NamedEdge{V}}}}
+    leftface::Dictionary{NamedEdge{V}, Union{Nothing, NamedFace{V}}}
     # The next and previous directed edge around the face to the left of each directed edge.
     next::Dictionary{NamedEdge{V}, NamedEdge{V}}
     prev::Dictionary{NamedEdge{V}, NamedEdge{V}}
@@ -47,8 +64,8 @@ function planar_embedding(graph::AbstractGraph, position)
         set!(rotation, vertex, around)
     end
 
-    faces = Vector{NamedEdge{V}}[]
-    leftface = Dictionary{NamedEdge{V}, Union{Nothing, Vector{NamedEdge{V}}}}()
+    faces = NamedFace{V}[]
+    leftface = Dictionary{NamedEdge{V}, Union{Nothing, NamedFace{V}}}()
     next_edges = Dictionary{NamedEdge{V}, NamedEdge{V}}()
     prev_edges = Dictionary{NamedEdge{V}, NamedEdge{V}}()
     nouter = 0
@@ -70,8 +87,9 @@ function planar_embedding(graph::AbstractGraph, position)
             nouter += 1
             foreach(edge -> set!(leftface, edge, nothing), cycle)
         else
-            push!(faces, cycle)
-            foreach(edge -> set!(leftface, edge, cycle), cycle)
+            face = NamedFace(cycle)
+            push!(faces, face)
+            foreach(edge -> set!(leftface, edge, face), cycle)
         end
     end
 
