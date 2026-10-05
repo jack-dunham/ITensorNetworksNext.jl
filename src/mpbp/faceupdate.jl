@@ -8,7 +8,7 @@ cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reve
 
 # Transfer matrix at `src(outgoing)` from the face edge before `outgoing` to `outgoing`.
 function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
-    incoming = prev_edge(env.embedding, outgoing)
+    incoming = prevedge(env.embedding, outgoing)
     vertex = src(outgoing)
     exclude = (src(incoming), dst(outgoing))
 
@@ -46,12 +46,12 @@ function right_blocks(env::CTMEnvironment, face, transfers, cut, right_basis)
     last_edge = last(face)
     blocks = Dictionary(
         [last_edge],
-        [unmatricize(right_basis, cut, (bond(env, prev_edge(embedding, last_edge)),))]
+        [unmatricize(right_basis, cut, (bond(env, prevedge(embedding, last_edge)),))]
     )
     for edge in reverse(face[2:end])
-        previous = prev_edge(embedding, edge)
+        previous = prevedge(embedding, edge)
         block = transfers[edge] * blocks[edge]
-        set!(blocks, previous, block * inverse(corner(env, prev_edge(embedding, previous))))
+        set!(blocks, previous, block * inverse(corner(env, prevedge(embedding, previous))))
     end
     return blocks
 end
@@ -67,12 +67,12 @@ function left_blocks(env::CTMEnvironment, face, transfers, cut, left_basis)
             unmatricize(
                 transpose(left_basis),
                 cut,
-                (bond(env, next_edge(embedding, last_edge)),)
+                (bond(env, nextedge(embedding, last_edge)),)
             ),
         ]
     )
     for edge in face[1:(end - 1)]
-        block = blocks[prev_edge(embedding, edge)] * transfers[edge]
+        block = blocks[prevedge(embedding, edge)] * transfers[edge]
         set!(blocks, edge, inverse(corner(env, edge)) * block)
     end
     return blocks
@@ -124,7 +124,7 @@ function face_solve(
         return length(old_bond) == bond_dim ? old_bond : Index(bond_dim)
     end
     corners = map(Dictionary(face, face)) do edge
-        return diagonal_tensor(roots, new_bonds[edge], new_bonds[next_edge(embedding, edge)])
+        return diagonal_tensor(roots, new_bonds[edge], new_bonds[nextedge(embedding, edge)])
     end
     return corners, (right_basis, left_basis)
 end
@@ -157,7 +157,7 @@ function set_face_edge_tensors!(
         left_blocks(env, face, transfers, cut, Diagonal(inv.(roots)) * left_basis)
     for edge in face
         reversed = reverse(edge)
-        previous = prev_edge(env.embedding, reversed)
+        previous = prevedge(env.embedding, reversed)
         env.edgetensors[reversed] = right_projectors[edge] * inverse(corner(env, reversed))
         env.edgetensors[edge] = left_projectors[edge] * inverse(corner(env, previous))
     end
