@@ -3,7 +3,7 @@ using .AlgorithmsInterfaceExtensions:
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using DataGraphs: edge_data
 using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
-using ITensorBase: AbstractITensor, operator, state
+using ITensorBase: AbstractITensor, inputnames, operator, outputnames, state
 using LinearAlgebra: norm, normalize, tr
 using NamedGraphs: forest_cover_edge_sequence, subgraph
 
@@ -266,9 +266,7 @@ function bilinearform_message_update!(
         algorithm, cache, factors::AbstractBilinearFormNetwork, edge
     )
     new_tensor = updated_message(algorithm, cache, factors, edge)
-    branames = linknames(branetwork(factors), edge)
-    ketnames = linknames(ketnetwork(factors), edge)
-    new_message = operator(new_tensor, branames, ketnames)
+    new_message = operator(new_tensor, outputnames(cache[edge]), inputnames(cache[edge]))
     if algorithm.normalize
         message_norm = tr(new_message)
         iszero(message_norm) || (new_message /= message_norm)
