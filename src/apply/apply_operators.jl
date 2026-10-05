@@ -7,7 +7,7 @@ using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTe
     rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
 using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, svd_trunc
-using NamedGraphs: boundary_edges
+using NamedGraphs: boundary_edges, vertextype
 using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_invsqrth_safe, sqrth_safe
 using TensorAlgebra: isdual, matricize, twist!, unmatricize
 
@@ -119,12 +119,13 @@ end
 end
 
 @kwdef mutable struct ApplyOperatorsState{
-        Iterate, Env, StoppingCriterionState <: AI.StoppingCriterionState,
+        Iterate, Env, StoppingCriterionState <: AI.StoppingCriterionState, EnvironmentState,
     } <: AI.State
     iterate::Iterate
     env::Env
     iteration::Int = 0
     stopping_criterion_state::StoppingCriterionState
+    environment_state::EnvironmentState
 end
 
 function AI.initialize_state(
@@ -134,8 +135,11 @@ function AI.initialize_state(
     stopping_criterion_state = AI.initialize_state(
         problem, algorithm, algorithm.stopping_criterion; iterate
     )
+    environment_state = initialize_environment_state(
+        algorithm.environment_algorithm, problem, algorithm; iterate
+    )
     return ApplyOperatorsState(;
-        iterate, env, iteration, stopping_criterion_state
+        iterate, env, iteration, stopping_criterion_state, environment_state
     )
 end
 
@@ -146,8 +150,7 @@ function AI.step!(
     # Prepare for the operator application, for example by updating the
     # environments in a path between where the operators are being applied.
     state.iterate, state.env = apply_operator_environment_preparation(
-        algorithm.environment_algorithm, algorithm.operator_algorithm,
-        problem.operators, state.iteration, state.iterate, state.env
+        algorithm.environment_algorithm, problem, algorithm, state
     )
     state.iterate, state.env = apply_operator(
         algorithm.operator_algorithm, problem.operators[state.iteration], state.iterate,
@@ -172,10 +175,15 @@ end
 struct NoApplyOperatorEnvironmentPreparation <: AbstractAlgorithm end
 
 function apply_operator_environment_preparation(
-        ::NoApplyOperatorEnvironmentPreparation, operator_algorithm, operators, iteration,
-        iterate, env
+        ::NoApplyOperatorEnvironmentPreparation, problem, algorithm, state
     )
-    return iterate, env
+    return state.iterate, state.env
+end
+
+function initialize_environment_state(
+        ::NoApplyOperatorEnvironmentPreparation, problem, algorithm; iterate
+    )
+    return nothing
 end
 
 function default_algorithm(
@@ -184,9 +192,137 @@ function default_algorithm(
     return NoApplyOperatorEnvironmentPreparation()
 end
 
+"""
+    BeliefPropagationEnvironment(; when = StopWhenVertexRevisited(), kwargs...)
+
+Environment preparation that runs [`beliefpropagation`](@ref) on the environment before a
+gate whenever the stopping criterion `when` is met, counting only the gates applied since
+belief propagation last ran. `kwargs` are forwarded to `beliefpropagation` and must include
+its `stopping_criterion`.
+"""
+struct BeliefPropagationEnvironment{When <: AI.StoppingCriterion, Kwargs <: NamedTuple} <:
+    AbstractAlgorithm
+    when::When
+    kwargs::Kwargs
+end
+function BeliefPropagationEnvironment(; when = StopWhenVertexRevisited(), kwargs...)
+    return BeliefPropagationEnvironment(when, (; kwargs...))
+end
+
+# `iteration` counts the gates applied since belief propagation last ran;
+# `operator_index` is the index in `problem.operators` of the next gate.
+@kwdef mutable struct BeliefPropagationEnvironmentState{
+        Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
+    } <: AI.State
+    iterate::Iterate
+    iteration::Int = 0
+    operator_index::Int = 0
+    stopping_criterion_state::StoppingCriterionState
+end
+
+function initialize_environment_state(
+        environment_algorithm::BeliefPropagationEnvironment, problem, algorithm; iterate
+    )
+    stopping_criterion_state = AI.initialize_state(
+        problem, algorithm, environment_algorithm.when; iterate
+    )
+    return BeliefPropagationEnvironmentState(; iterate, stopping_criterion_state)
+end
+
+function apply_operator_environment_preparation(
+        environment_algorithm::BeliefPropagationEnvironment, problem, algorithm, state
+    )
+    environment_state = state.environment_state
+    environment_state.iterate = state.iterate
+    environment_state.operator_index = state.iteration
+    when = environment_algorithm.when
+    if AI.is_finished!(
+            problem, algorithm, environment_state, when,
+            environment_state.stopping_criterion_state
+        )
+        state.env = beliefpropagation(
+            NormNetwork(state.iterate, branamemap(state.env)), state.env;
+            environment_algorithm.kwargs...
+        )
+        environment_state.iteration = 0
+        AI.initialize_state!(
+            problem, algorithm, when, environment_state.stopping_criterion_state
+        )
+    end
+    environment_state.iteration += 1
+    return state.iterate, state.env
+end
+
+"""
+    StopWhenVertexRevisited()
+
+Stopping criterion for [`BeliefPropagationEnvironment`](@ref), met when the next operator
+acts on two vertices and one of them was updated since belief propagation last ran.
+Vertices come from [`operator_vertices`](@ref).
+"""
+struct StopWhenVertexRevisited <: AI.StoppingCriterion end
+
+struct StopWhenVertexRevisitedState{V} <: AI.StoppingCriterionState
+    updated::Set{V}
+end
+
+function AI.initialize_state(
+        ::AI.Problem, ::AI.Algorithm, ::StopWhenVertexRevisited; iterate
+    )
+    return StopWhenVertexRevisitedState(Set{vertextype(iterate)}())
+end
+
+function AI.initialize_state!(
+        ::AI.Problem, ::AI.Algorithm, ::StopWhenVertexRevisited,
+        st::StopWhenVertexRevisitedState
+    )
+    empty!(st.updated)
+    return st
+end
+
+function AI.is_finished(
+        problem::ApplyOperatorsProblem, algorithm::ApplyOperatorsAlgorithm,
+        state::BeliefPropagationEnvironmentState, ::StopWhenVertexRevisited,
+        st::StopWhenVertexRevisitedState
+    )
+    vertices = operator_vertices(
+        algorithm.operator_algorithm, state.iterate, problem.operators[state.operator_index]
+    )
+    return length(vertices) == 2 && any(in(st.updated), vertices)
+end
+
+# Records the vertices of the previous gate before checking the next one, so the gate
+# applied right after belief propagation runs is recorded even though the state was reset.
+function AI.is_finished!(
+        problem::ApplyOperatorsProblem, algorithm::ApplyOperatorsAlgorithm,
+        state::BeliefPropagationEnvironmentState, c::StopWhenVertexRevisited,
+        st::StopWhenVertexRevisitedState
+    )
+    if state.iteration > 0
+        previous = problem.operators[state.operator_index - 1]
+        previous_vertices =
+            operator_vertices(algorithm.operator_algorithm, state.iterate, previous)
+        union!(st.updated, previous_vertices)
+    end
+    return AI.is_finished(problem, algorithm, state, c, st)
+end
+
+AI.indicates_convergence(::StopWhenVertexRevisited) = false
+AI.get_reason(::StopWhenVertexRevisited, ::StopWhenVertexRevisitedState) = nothing
+
 # === Layer 3: single-operator strategy ===
 
 abstract type ApplyOperatorAlgorithm <: AbstractAlgorithm end
+
+"""
+    operator_vertices(operator_algorithm, network, operator)
+
+The vertices of `network` that `operator` acts on under `operator_algorithm`; by default
+[`operator_support`](@ref).
+"""
+function operator_vertices(operator_algorithm, network, operator)
+    return operator_support(network, operator)
+end
 
 """
     apply_operator(operator, state, env; alg=nothing, kwargs...) -> (state, env)
@@ -224,6 +360,7 @@ function apply_operator!(
     )
     apply_gate_bp!(
         dest, operator, state, env;
+        vertices = operator_vertices(algorithm, state, operator),
         algorithm.trunc, algorithm.normalize
     )
     return dest
@@ -243,10 +380,9 @@ end
 
 function apply_gate_bp!(
         dest::AbstractITensorNetwork, op::AbstractITensor,
-        state::AbstractITensorNetwork, env; kwargs...
+        state::AbstractITensorNetwork, env;
+        vertices = operator_support(state, op), kwargs...
     )
-    vertices = operator_support(state, op)
-
     isempty(vertices) && throw(
         ArgumentError("operator shares no indices with the tensor network")
     )
