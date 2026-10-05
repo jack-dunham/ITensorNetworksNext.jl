@@ -103,13 +103,13 @@ end
 
 """
     face_solve(embedding, face, transfers, bonds; maxdim, alg, reference = nothing)
-        -> corners, bases
+        -> corners, right_basis, left_basis
 
 Solve the `NamedFace` `face` from its normalised corner transfer tensors `transfers` keyed
 by edge and its current bond indices `bonds`, which are kept while the bond dimension is
 unchanged. Reads no environment, so the transfer tensors can be computed by whichever ranks
-own the vertices. `bases` is the `(right_basis, left_basis)` of the face's invariant subspace,
-from which `face_projectors` builds the projectors and which a later solve takes as
+own the vertices. `right_basis` and `left_basis` span the face's invariant subspace;
+`face_projectors` builds the projectors from them, and a later solve takes the pair as
 `reference`.
 """
 function face_solve(
@@ -142,7 +142,7 @@ function face_solve(
     corners = map(Dictionary(face, face)) do edge
         return diagonal_tensor(roots, new_bonds[edge], new_bonds[nextedge(embedding, edge)])
     end
-    return corners, (right_basis, left_basis)
+    return corners, right_basis, left_basis
 end
 
 function set_face_corners!(env::CTMEnvironment, face, corners)
@@ -152,16 +152,19 @@ function set_face_corners!(env::CTMEnvironment, face, corners)
     return env
 end
 
-set_face_bases!(env::CTMEnvironment, face, bases) = (env.bases[face] = bases; env)
+function set_face_bases!(env::CTMEnvironment, face, right_basis, left_basis)
+    env.bases[face] = (right_basis, left_basis)
+    return env
+end
 
 """
-    face_projectors(env, face, transfers, (right_basis, left_basis))
+    face_projectors(env, face, transfers, right_basis, left_basis)
         -> right_projectors, left_projectors
 
 The right and left projectors at each edge of `face`, built from its bases by carrying them
 around the face through `transfers`. The face's new corners must already be in `env`.
 """
-function face_projectors(env::CTMEnvironment, face, transfers, (right_basis, left_basis))
+function face_projectors(env::CTMEnvironment, face, transfers, right_basis, left_basis)
     # Every corner of the face is `D = Λ^(1/m)`; the bases are rescaled by `Λ / D` and `1 / D`
     # so that each pass divides by one corner per step.
     roots = corner_diagonal(env, first(face))
@@ -175,7 +178,7 @@ end
 
 # Writes both edge tensors on the face edge `edge` from that face's projectors at its cut. It
 # reads the neighbouring face's corners, which must be those the projectors were built with.
-function set_face_edge!(env::CTMEnvironment, edge, (right_projector, left_projector))
+function set_face_edge!(env::CTMEnvironment, edge, right_projector, left_projector)
     reversed = reverse(edge)
     previous = prevedge(env.embedding, reversed)
     env.edgetensors[reversed] = right_projector * inverse(cornertensor(env, reversed))
@@ -198,16 +201,27 @@ function face_update!(
         alg::AbstractAlgorithm
     )
     transfers = transfer_tensors(tn, env, face)
-    corners, bases = face_solve(
+
+    corners, right_basis, left_basis = face_solve(
         env.embedding, face, transfers,
         Dictionary(face, [bond(env, edge) for edge in face]);
         maxdim, alg, reference = get(env.bases, face, nothing)
     )
+
     set_face_corners!(env, face, corners)
-    set_face_bases!(env, face, bases)
-    right_projectors, left_projectors = face_projectors(env, face, transfers, bases)
+    set_face_bases!(env, face, right_basis, left_basis)
+
+    right_projectors, left_projectors = face_projectors(
+        env, face, transfers,
+        right_basis, left_basis
+    )
+
     for edge in face
-        set_face_edge!(env, edge, (right_projectors[edge], left_projectors[edge]))
+        right_projector = right_projectors[edge]
+        left_projector = left_projectors[edge]
+
+        set_face_edge!(env, edge, right_projector, left_projector)
     end
+
     return env
 end
