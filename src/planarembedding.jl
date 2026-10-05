@@ -23,11 +23,9 @@ struct PlanarEmbedding{V, G <: AbstractGraph}
     graph::G
     rotation::Dictionary{V, Vector{V}}
     faces::Vector{NamedFace{V}}
-    # The face to the left of each directed edge, or `nothing` for the outer face.
-    leftface::Dictionary{NamedEdge{V}, Union{Nothing, NamedFace{V}}}
-    # The next and previous directed edge around the face to the left of each directed edge.
-    next::Dictionary{NamedEdge{V}, NamedEdge{V}}
-    prev::Dictionary{NamedEdge{V}, NamedEdge{V}}
+    outer_face::NamedFace{V}
+    # The face to the left of each directed edge, inner or outer, and the edge's position in it.
+    positions::Dictionary{NamedEdge{V}, Tuple{NamedFace{V}, Int}}
 end
 
 function _next_edge(rotation, edge)
@@ -65,48 +63,48 @@ function planar_embedding(graph::AbstractGraph, position)
     end
 
     faces = NamedFace{V}[]
-    leftface = Dictionary{NamedEdge{V}, Union{Nothing, NamedFace{V}}}()
-    next_edges = Dictionary{NamedEdge{V}, NamedEdge{V}}()
-    prev_edges = Dictionary{NamedEdge{V}, NamedEdge{V}}()
-    nouter = 0
+    outer_faces = NamedFace{V}[]
+    positions = Dictionary{NamedEdge{V}, Tuple{NamedFace{V}, Int}}()
     for undirected in edges(graph),
             start in (NamedEdge{V}(undirected), reverse(NamedEdge{V}(undirected)))
 
-        haskey(leftface, start) && continue
+        haskey(positions, start) && continue
 
         cycle = [start]
         while (next = _next_edge(rotation, last(cycle))) != start
             push!(cycle, next)
         end
-        for (edge, following) in zip(cycle, circshift(cycle, -1))
-            set!(next_edges, edge, following)
-            set!(prev_edges, following, edge)
+        face = NamedFace(cycle)
+        for (index, edge) in enumerate(cycle)
+            set!(positions, edge, (face, index))
         end
-
-        if _signed_area(position, cycle) < 0
-            nouter += 1
-            foreach(edge -> set!(leftface, edge, nothing), cycle)
-        else
-            face = NamedFace(cycle)
-            push!(faces, face)
-            foreach(edge -> set!(leftface, edge, face), cycle)
-        end
+        push!(_signed_area(position, cycle) < 0 ? outer_faces : faces, face)
     end
 
-    nouter == 1 || throw(
+    length(outer_faces) == 1 || throw(
         ArgumentError(
-            "`position` gives $nouter outer faces; a connected planar drawing has one."
+            "`position` gives $(length(outer_faces)) outer faces; a connected planar drawing has one."
         )
     )
 
     return PlanarEmbedding{V, typeof(graph)}(
-        graph, rotation, faces, leftface, next_edges, prev_edges
+        graph, rotation, faces, only(outer_faces), positions
     )
 end
 
-next_edge(embedding::PlanarEmbedding, edge) = embedding.next[NamedEdge(edge)]
-prev_edge(embedding::PlanarEmbedding, edge) = embedding.prev[NamedEdge(edge)]
-leftface(embedding::PlanarEmbedding, edge) = embedding.leftface[NamedEdge(edge)]
+function next_edge(embedding::PlanarEmbedding, edge)
+    face, index = embedding.positions[NamedEdge(edge)]
+    return face[mod1(index + 1, length(face))]
+end
+function prev_edge(embedding::PlanarEmbedding, edge)
+    face, index = embedding.positions[NamedEdge(edge)]
+    return face[mod1(index - 1, length(face))]
+end
+# `nothing` for the outer face.
+function leftface(embedding::PlanarEmbedding, edge)
+    face = first(embedding.positions[NamedEdge(edge)])
+    return face == embedding.outer_face ? nothing : face
+end
 
 """
     face_coloring(embedding) -> Dictionary
