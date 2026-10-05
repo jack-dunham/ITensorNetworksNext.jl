@@ -1,6 +1,6 @@
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using ITensorBase: AbstractNamedTensor, Index, rename
-using LinearAlgebra: Diagonal, eigen, norm, ordschur, qr, schur
+using LinearAlgebra: Diagonal, cond, eigen, norm, ordschur, qr, schur
 using Random: Xoshiro
 using TensorAlgebra: matricize, unmatricize
 
@@ -102,6 +102,31 @@ function left_invariant_rows(matrix, eigenvalues, nkept)
     decomposition = schur(Matrix(transpose(matrix)))
     decomposition = ordschur(decomposition, abs.(decomposition.values) .> threshold)
     return transpose(decomposition.Z[:, 1:nkept])
+end
+
+# Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
+# bases onto `previous` within blocks of equal eigenvalues, which leaves the corners diagonal.
+function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_rtol)
+    size(previous) == size(right_basis) || return right_basis, left_basis, eigenvalues
+    overlaps = abs.(left_basis * previous)
+    order = Int[]
+    for column in axes(overlaps, 2)
+        candidates = setdiff(axes(overlaps, 1), order)
+        push!(order, candidates[argmax(overlaps[candidates, column])])
+    end
+    right_basis, left_basis = right_basis[:, order], left_basis[order, :]
+    eigenvalues = eigenvalues[order]
+
+    rotation = left_basis * previous
+    for i in axes(rotation, 1), j in axes(rotation, 2)
+        degenerate =
+            i == j ||
+            abs(eigenvalues[i] - eigenvalues[j]) ≤ degeneracy_rtol * abs(eigenvalues[i])
+        degenerate || (rotation[i, j] = 0)
+    end
+    # A near-singular rotation means the subspace has moved; aligning onto it would amplify noise.
+    cond(rotation) < 1.0e8 || return right_basis, left_basis, eigenvalues
+    return right_basis * rotation, rotation \ left_basis, eigenvalues
 end
 
 """

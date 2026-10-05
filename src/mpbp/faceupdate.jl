@@ -1,7 +1,7 @@
 using Dictionaries: Dictionary, set!
 using Graphs: AbstractEdge, dst, src
 using ITensorBase: Index, inds, name, names, state
-using LinearAlgebra: Diagonal, cond, inv, norm, opnorm
+using LinearAlgebra: Diagonal, inv, norm, opnorm
 using TensorAlgebra: unmatricize
 
 cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
@@ -81,31 +81,6 @@ function inverse(tensor)
     row, column = inds(tensor)
     diagonal = [tensor[row => k, column => k] for k in 1:length(row)]
     return diagonal_tensor(inv.(diagonal), row, column)
-end
-
-# Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
-# bases onto `previous` within blocks of equal eigenvalues, which leaves the corners diagonal.
-function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_rtol)
-    size(previous) == size(right_basis) || return right_basis, left_basis, eigenvalues
-    overlaps = abs.(left_basis * previous)
-    order = Int[]
-    for column in axes(overlaps, 2)
-        candidates = setdiff(axes(overlaps, 1), order)
-        push!(order, candidates[argmax(overlaps[candidates, column])])
-    end
-    right_basis, left_basis = right_basis[:, order], left_basis[order, :]
-    eigenvalues = eigenvalues[order]
-
-    rotation = left_basis * previous
-    for i in axes(rotation, 1), j in axes(rotation, 2)
-        degenerate =
-            i == j ||
-            abs(eigenvalues[i] - eigenvalues[j]) ≤ degeneracy_rtol * abs(eigenvalues[i])
-        degenerate || (rotation[i, j] = 0)
-    end
-    # A near-singular rotation means the subspace has moved; aligning onto it would amplify noise.
-    cond(rotation) < 1.0e8 || return right_basis, left_basis, eigenvalues
-    return right_basis * rotation, rotation \ left_basis, eigenvalues
 end
 
 """
