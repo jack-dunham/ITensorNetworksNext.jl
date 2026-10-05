@@ -133,13 +133,14 @@ function face_solve(
     return corners, (right_basis, left_basis)
 end
 
-function set_face_corners!(env::CTMEnvironment, face, corners, bases)
+function set_face_corners!(env::CTMEnvironment, face, corners)
     for edge in face
         env.cornertensors[edge] = corners[edge]
     end
-    env.bases[face] = bases
     return env
 end
+
+set_face_bases!(env::CTMEnvironment, face, bases) = (env.bases[face] = bases; env)
 
 """
     set_face_edge_tensors!(env, face, transfers, cut, (right_basis, left_basis)) -> env
@@ -189,7 +190,8 @@ function face_update!(
         Dictionary(face, [bond(env, edge) for edge in face]);
         maxdim, alg, reference = get(env.bases, face, nothing)
     )
-    set_face_corners!(env, face, corners, bases)
+    set_face_corners!(env, face, corners)
+    set_face_bases!(env, face, bases)
     set_face_edge_tensors!(env, face, transfers, cut, bases)
     return env
 end
