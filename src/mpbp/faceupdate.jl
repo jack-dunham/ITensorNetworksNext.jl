@@ -98,7 +98,7 @@ tensors `transfers` keyed by edge, the indices `cut` of the cut at its last edge
 current bond indices `bonds`, which are kept while the bond dimension is unchanged. Reads no
 environment, so the transfer tensors can be computed by whichever ranks own the vertices.
 `bases` is the `(right_basis, left_basis)` of the face's invariant subspace, from which
-`set_face_edge_tensors!` builds the projectors and which a later solve takes as `reference`.
+`set_face_edges!` builds the projectors and which a later solve takes as `reference`.
 """
 function face_solve(
         embedding, face, transfers, cut, bonds;
@@ -143,13 +143,13 @@ end
 set_face_bases!(env::CTMEnvironment, face, bases) = (env.bases[face] = bases; env)
 
 """
-    set_face_edge_tensors!(env, face, transfers, cut, (right_basis, left_basis)) -> env
+    set_face_edges!(env, face, transfers, cut, (right_basis, left_basis)) -> env
 
 Build the projectors at each edge of `face` from its bases and write the edge tensors of its
 edges in both directions. The face's new corners must already be in `env`, and the
 neighbouring faces' corners must be those `transfers` were computed with.
 """
-function set_face_edge_tensors!(
+function set_face_edges!(
         env::CTMEnvironment, face, transfers, cut, (right_basis, left_basis)
     )
     # Every corner of the face is `D = Λ^(1/m)`; the bases are rescaled by `Λ / D` and `1 / D`
@@ -192,6 +192,6 @@ function face_update!(
     )
     set_face_corners!(env, face, corners)
     set_face_bases!(env, face, bases)
-    set_face_edge_tensors!(env, face, transfers, cut, bases)
+    set_face_edges!(env, face, transfers, cut, bases)
     return env
 end
