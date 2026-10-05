@@ -102,19 +102,17 @@ function inverse(tensor)
 end
 
 """
-    face_solve(embedding, face, transfers, bonds; maxdim, alg, reference = nothing)
-        -> corners, right_basis, left_basis
+    face_solve(face, transfers; maxdim, alg, reference = nothing)
+        -> roots, right_basis, left_basis
 
 Solve the `NamedFace` `face` from its normalised corner transfer tensors `transfers` keyed
-by edge and its current bond indices `bonds`, which are kept while the bond dimension is
-unchanged. Reads no environment, so the transfer tensors can be computed by whichever ranks
-own the vertices. `right_basis` and `left_basis` span the face's invariant subspace;
-`face_projectors` builds the projectors from them, and a later solve takes the pair as
-`reference`.
+by edge. Reads no environment, so the transfer tensors can be computed by whichever ranks own
+the vertices. `roots` is the diagonal every corner of the face holds; `right_basis` and
+`left_basis` span the face's invariant subspace, `face_projectors` builds the projectors from
+them, and a later solve takes the pair as `reference`.
 """
 function face_solve(
-        embedding, face, transfers, bonds;
-        maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
+        face, transfers; maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
     )
     product = CornerTransferProduct(collect(transfers), face_cut(face, transfers))
     right_basis, left_basis, eigenvalues =
@@ -136,18 +134,19 @@ function face_solve(
         projector_condition = opnorm(left_basis) * opnorm(right_basis),
     )
 
-    new_bonds = map(bonds) do old_bond
-        return length(old_bond) == bond_dim ? old_bond : Index(bond_dim)
-    end
-    corners = map(Dictionary(face, face)) do edge
-        return diagonal_tensor(roots, new_bonds[edge], new_bonds[nextedge(embedding, edge)])
-    end
-    return corners, right_basis, left_basis
+    return roots, right_basis, left_basis
 end
 
-function set_face_corners!(env::CTMEnvironment, face, corners)
+# Writes each corner of `face` with `roots` on its diagonal, keeping a bond's index while its
+# dimension is unchanged. Bonds are read off corners, so all are read before any is written.
+function set_face_corners!(env::CTMEnvironment, face, roots)
+    new_bonds = map(Dictionary(face, face)) do edge
+        old_bond = bond(env, edge)
+        return length(old_bond) == length(roots) ? old_bond : Index(length(roots))
+    end
     for edge in face
-        env.cornertensors[edge] = corners[edge]
+        row, column = new_bonds[edge], new_bonds[nextedge(env.embedding, edge)]
+        env.cornertensors[edge] = diagonal_tensor(roots, row, column)
     end
     return env
 end
@@ -202,13 +201,11 @@ function face_update!(
     )
     transfers = transfer_tensors(tn, env, face)
 
-    corners, right_basis, left_basis = face_solve(
-        env.embedding, face, transfers,
-        Dictionary(face, [bond(env, edge) for edge in face]);
-        maxdim, alg, reference = get(env.bases, face, nothing)
+    roots, right_basis, left_basis = face_solve(
+        face, transfers; maxdim, alg, reference = get(env.bases, face, nothing)
     )
 
-    set_face_corners!(env, face, corners)
+    set_face_corners!(env, face, roots)
     set_face_bases!(env, face, right_basis, left_basis)
 
     right_projectors, left_projectors = face_projectors(
