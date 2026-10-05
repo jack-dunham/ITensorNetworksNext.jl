@@ -1,5 +1,5 @@
-using Dictionaries: Dictionary, dictionary
-using ITensorBase: similar_operator, uniquename
+using Dictionaries: Dictionary, dictionary, set!
+using ITensorBase: inputnames, outputnames, similar_operator, uniquename
 using ITensorNetworksNext
 
 """
@@ -8,15 +8,21 @@ using ITensorNetworksNext
 Lazy wrapper representing the norm `⟨tn|tn⟩` of `tn::ITensorNetwork{T, V, I}`,
 together with a per-edge ket→bra name mapping that, for each index in the ket layer, defines
 the name of the corresponding index in the bra layer.
+
+    NormNetwork(ket, map, [names])
+
+The bra layer takes `map[name]` for each link name of `ket` and each name in `names`; every
+other name is shared by both layers.
 """
 struct NormNetwork{T, V, I} <: AbstractBilinearFormNetwork{T, V, I}
     ket::ITensorNetwork{T, V, I}
     braname::Dictionary{I, I}
     function NormNetwork(
             ket::ITensorNetwork{T, V, I},
-            map::Dictionary{I, I}
+            map::Dictionary{I, I},
+            names = ()
         ) where {T, V, I}
-        return new{T, V, I}(ket, select_branames(ket, map, ()))
+        return new{T, V, I}(ket, select_branames(ket, map, names))
     end
 end
 
@@ -71,3 +77,21 @@ generated via the `ITensorBase.uniquename` function.
 """
 normnetwork(tn::ITensorNetwork) = NormNetwork(tn)
 normnetwork(tn::ITensorNetwork, braname) = NormNetwork(tn, braname)
+
+"""
+    message_normnetwork(tn::ITensorNetwork, messages) -> NormNetwork
+
+The norm network of `tn` whose bra layer uses the names of the operator-valued `messages`:
+each input name of a message (a ket bond) maps to the output name at the same position. A
+bond held by a single vertex of `tn` is mapped too, provided a message carries it.
+"""
+function message_normnetwork(tn::ITensorNetwork{T, V, I}, messages) where {T, V, I}
+    braname = Dictionary{I, I}()
+    for edge in edges(messages)
+        message = messages[edge]
+        for (ketname, braname_edge) in zip(inputnames(message), outputnames(message))
+            set!(braname, ketname, braname_edge)
+        end
+    end
+    return NormNetwork(tn, braname, keys(braname))
+end
