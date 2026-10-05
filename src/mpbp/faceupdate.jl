@@ -85,7 +85,7 @@ end
 
 # Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
 # bases onto `previous` within blocks of equal eigenvalues, which leaves the corners diagonal.
-function align_bases(right_basis, left_basis, eigenvalues, previous)
+function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_rtol)
     size(previous) == size(right_basis) || return right_basis, left_basis, eigenvalues
     overlaps = abs.(left_basis * previous)
     order = Int[]
@@ -98,7 +98,9 @@ function align_bases(right_basis, left_basis, eigenvalues, previous)
 
     rotation = left_basis * previous
     for i in axes(rotation, 1), j in axes(rotation, 2)
-        degenerate = abs(eigenvalues[i] - eigenvalues[j]) ≤ 1.0e-10 * abs(eigenvalues[i])
+        degenerate =
+            i == j ||
+            abs(eigenvalues[i] - eigenvalues[j]) ≤ degeneracy_rtol * abs(eigenvalues[i])
         degenerate || (rotation[i, j] = 0)
     end
     # A near-singular rotation means the subspace has moved; aligning onto it would amplify noise.
@@ -122,12 +124,9 @@ function face_solve(
         maxdim::Integer, alg::AbstractAlgorithm, previous_basis = nothing
     )
     product = CornerTransferProduct(collect(transfers), cut)
-    right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
+    right_basis, left_basis, eigenvalues =
+        invariant_subspace(alg, product, maxdim; reference = previous_basis)
     bond_dim = length(eigenvalues)
-    if !isnothing(previous_basis)
-        right_basis, left_basis, eigenvalues =
-            align_bases(right_basis, left_basis, eigenvalues, previous_basis)
-    end
 
     # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
     # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
