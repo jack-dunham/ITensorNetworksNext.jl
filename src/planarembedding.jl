@@ -1,4 +1,4 @@
-using Dictionaries: Dictionary, Indices, set!
+using Dictionaries: Dictionary, set!
 using Graphs: AbstractGraph, dst, neighbors, src, vertices
 using NamedGraphs: NamedEdge, all_edges
 
@@ -51,6 +51,11 @@ function _signed_area(position, cycle)
     end / 2
 end
 
+function _angle(position, vertex, neighbor)
+    (x1, y1), (x2, y2) = position(vertex), position(neighbor)
+    return atan(y2 - y1, x2 - x1)
+end
+
 """
     planar_embedding(graph, position) -> PlanarEmbedding
 
@@ -59,33 +64,49 @@ must be connected and have no crossing edges; this is not checked.
 """
 function planar_embedding(graph::AbstractGraph, position)
     V = eltype(vertices(graph))
-    function angle(vertex, neighbor)
-        (x1, y1), (x2, y2) = position(vertex), position(neighbor)
-        return atan(y2 - y1, x2 - x1)
-    end
+
     # The neighbours of each vertex in counterclockwise order.
-    rotation = map(Indices(collect(vertices(graph)))) do vertex
-        return sort(collect(neighbors(graph, vertex)); by = neighbor -> angle(vertex, neighbor))
+    rotation = map(vertices(graph)) do vertex
+        return sort(
+            neighbors(graph, vertex);
+            by = neighbor -> _angle(position, vertex, neighbor)
+        )
     end
 
     faces = NamedFace{V}[]
-    outer_faces = NamedFace{V}[]
     positions = Dictionary{NamedEdge{V}, Tuple{NamedFace{V}, Int}}()
+
+    outer_face = nothing
+
     for start in all_edges(graph)
         haskey(positions, start) && continue
+
         face = NamedFace(_face_cycle(rotation, start))
+
         for (index, edge) in enumerate(face)
             set!(positions, edge, (face, index))
         end
-        push!(_signed_area(position, face) < 0 ? outer_faces : faces, face)
+
+        # Inner faces are traced counterclockwise and the outer face clockwise.
+        if _signed_area(position, face) < 0
+            isnothing(outer_face) || throw(
+                ArgumentError(
+                    "`position` gives more than one outer face; a connected planar drawing has one."
+                )
+            )
+            outer_face = face
+        else
+            push!(faces, face)
+        end
     end
 
-    length(outer_faces) == 1 || throw(
+    isnothing(outer_face) && throw(
         ArgumentError(
-            "`position` gives $(length(outer_faces)) outer faces; a connected planar drawing has one."
+            "`position` gives no outer face; a connected planar drawing has one."
         )
     )
-    return PlanarEmbedding{V, typeof(graph)}(graph, faces, only(outer_faces), positions)
+
+    return PlanarEmbedding{V, typeof(graph)}(graph, faces, outer_face, positions)
 end
 
 function nextedge(embedding::PlanarEmbedding, edge)
