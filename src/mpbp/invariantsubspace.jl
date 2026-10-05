@@ -105,14 +105,24 @@ function left_invariant_rows(matrix, eigenvalues, nkept)
 end
 
 """
-    invariant_subspace(alg::DenseEig, matrix, maxdim) -> (right_basis, left_basis, eigenvalues)
+    invariant_subspace(alg::DenseEig, matrix, maxdim; reference = nothing)
+        -> (right_basis, left_basis, eigenvalues)
 
 Dominant invariant subspace of `matrix`: `matrix * right_basis ≈ right_basis * Diagonal(eigenvalues)`,
 `left_basis * matrix ≈ Diagonal(eigenvalues) * left_basis` and `left_basis * right_basis ≈ I`.
 Eigenvalues of equal modulus are kept or dropped together.
+
+With a `reference` right basis of the same size, the basis is rotated onto it within blocks of
+eigenvalues equal to relative tolerance `alg.degeneracy_rtol`, and the eigenvalues follow the
+reference's order.
 """
-function invariant_subspace(alg::DenseEig, matrix, maxdim::Integer)
-    return AI.solve(InvariantSubspaceProblem(matrix, maxdim), DenseEigensolve(alg))
+function invariant_subspace(alg::DenseEig, matrix, maxdim::Integer; reference = nothing)
+    result = AI.solve(InvariantSubspaceProblem(matrix, maxdim), DenseEigensolve(alg))
+    return if isnothing(reference)
+        result
+    else
+        align_bases(result..., reference, alg.degeneracy_rtol)
+    end
 end
 
 # One dense eigendecomposition, run as a single step; the iterate is the kept
@@ -285,7 +295,12 @@ function AI.is_finished!(
 end
 AI.indicates_convergence(::StopWhenResidualBelow) = true
 
-function invariant_subspace(alg::SubspaceIteration, matrix, maxdim::Integer)
+function invariant_subspace(
+        alg::SubspaceIteration,
+        matrix,
+        maxdim::Integer;
+        reference = nothing
+    )
     dim = size(matrix, 1)
     nblock = min(dim, maxdim + alg.oversampling)
     rng = Xoshiro(alg.seed)
@@ -295,5 +310,10 @@ function invariant_subspace(alg::SubspaceIteration, matrix, maxdim::Integer)
     problem = InvariantSubspaceProblem(matrix, maxdim)
     stopping_criterion = AI.StopAfterIteration(alg.maxiter) | StopWhenResidualBelow(alg.tol)
     algorithm = RayleighRitzIteration(alg, stopping_criterion)
-    return AI.solve(problem, algorithm; iterate = (right, left))
+    result = AI.solve(problem, algorithm; iterate = (right, left))
+    return if isnothing(reference)
+        result
+    else
+        align_bases(result..., reference, alg.degeneracy_rtol)
+    end
 end
