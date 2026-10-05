@@ -106,7 +106,7 @@ const LATTICES = (
         )
         # A single edge tensor leaves log Z_B unchanged at the fixed point, so the pair on
         # `d` and `reverse(d)` is perturbed together.
-        for field in (:edgetensors, :corners)
+        for field in (:edgetensors, :cornertensors)
             ts = [getfield(env, field)[x] for x in (d, reverse(d))]
             δts = [randn(rng, eltype(t), Tuple(inds(t))) for t in ts]
             change(ε) = begin
