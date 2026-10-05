@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!
 using Graphs: dst, src
-using ITensorBase: Index, inds, name, names, state
+using ITensorBase: Index, commoninds, inds, name, names, state
 using LinearAlgebra: Diagonal, inv, norm, opnorm
 using TensorAlgebra: unmatricize
 
@@ -41,12 +41,20 @@ end
 
 # Right projector at each edge of `face`, carried backwards from `right_basis` at the last
 # edge and divided by a corner at each step; it has the bond of the face edge before it.
-function right_blocks(env::CTMEnvironment, face, transfers, cut, right_basis)
+# The cut at `face`'s last edge: the indices its last and first transfer tensors share.
+face_cut(face, transfers) = Tuple(commoninds(transfers[last(face)], transfers[first(face)]))
+
+function right_blocks(env::CTMEnvironment, face, transfers, right_basis)
     embedding = env.embedding
     last_edge = last(face)
     blocks = Dictionary(
         [last_edge],
-        [unmatricize(right_basis, cut, (bond(env, prevedge(embedding, last_edge)),))]
+        [
+            unmatricize(
+                right_basis, face_cut(face, transfers),
+                (bond(env, prevedge(embedding, last_edge)),)
+            ),
+        ]
     )
     for edge in reverse(face[2:end])
         previous = prevedge(embedding, edge)
@@ -62,7 +70,7 @@ end
 
 # Left projector at each edge of `face`, carried forwards from `left_basis` at the last edge
 # and divided by a corner at each step; it has the bond of the face edge after it.
-function left_blocks(env::CTMEnvironment, face, transfers, cut, left_basis)
+function left_blocks(env::CTMEnvironment, face, transfers, left_basis)
     embedding = env.embedding
     last_edge = last(face)
     blocks = Dictionary(
@@ -70,7 +78,7 @@ function left_blocks(env::CTMEnvironment, face, transfers, cut, left_basis)
         [
             unmatricize(
                 transpose(left_basis),
-                cut,
+                face_cut(face, transfers),
                 (bond(env, nextedge(embedding, last_edge)),)
             ),
         ]
@@ -90,21 +98,20 @@ function inverse(tensor)
 end
 
 """
-    face_solve(embedding, face, transfers, cut, bonds; maxdim, alg, reference = nothing)
+    face_solve(embedding, face, transfers, bonds; maxdim, alg, reference = nothing)
         -> corners, bases
 
 Solve the `NamedFace` `face` from its normalised corner transfer
-tensors `transfers` keyed by edge, the indices `cut` of the cut at its last edge, and its
-current bond indices `bonds`, which are kept while the bond dimension is unchanged. Reads no
+tensors `transfers` keyed by edge, and its current bond indices `bonds`, which are kept while the bond dimension is unchanged. Reads no
 environment, so the transfer tensors can be computed by whichever ranks own the vertices.
 `bases` is the `(right_basis, left_basis)` of the face's invariant subspace, from which
 `set_face_edges!` builds the projectors and which a later solve takes as `reference`.
 """
 function face_solve(
-        embedding, face, transfers, cut, bonds;
+        embedding, face, transfers, bonds;
         maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
     )
-    product = CornerTransferProduct(collect(transfers), cut)
+    product = CornerTransferProduct(collect(transfers), face_cut(face, transfers))
     right_basis, left_basis, eigenvalues =
         invariant_subspace(alg, product, maxdim; reference)
     bond_dim = length(eigenvalues)
@@ -143,23 +150,23 @@ end
 set_face_bases!(env::CTMEnvironment, face, bases) = (env.bases[face] = bases; env)
 
 """
-    set_face_edges!(env, face, transfers, cut, (right_basis, left_basis)) -> env
+    set_face_edges!(env, face, transfers, (right_basis, left_basis)) -> env
 
 Build the projectors at each edge of `face` from its bases and write the edge tensors of its
 edges in both directions. The face's new corners must already be in `env`, and the
 neighbouring faces' corners must be those `transfers` were computed with.
 """
 function set_face_edges!(
-        env::CTMEnvironment, face, transfers, cut, (right_basis, left_basis)
+        env::CTMEnvironment, face, transfers, (right_basis, left_basis)
     )
     # Every corner of the face is `D = Λ^(1/m)`; the bases are rescaled by `Λ / D` and `1 / D`
     # so that each pass divides by one corner per step.
     roots = corner_diagonal(env, first(face))
     m = length(face)
     right_projectors =
-        right_blocks(env, face, transfers, cut, right_basis * Diagonal(roots .^ (m - 1)))
+        right_blocks(env, face, transfers, right_basis * Diagonal(roots .^ (m - 1)))
     left_projectors =
-        left_blocks(env, face, transfers, cut, Diagonal(inv.(roots)) * left_basis)
+        left_blocks(env, face, transfers, Diagonal(inv.(roots)) * left_basis)
     for edge in face
         reversed = reverse(edge)
         previous = prevedge(env.embedding, reversed)
@@ -184,14 +191,13 @@ function face_update!(
         alg::AbstractAlgorithm
     )
     transfers = transfer_tensors(tn, env, face)
-    cut = cut_inds(tn, env, last(face))
     corners, bases = face_solve(
-        env.embedding, face, transfers, cut,
+        env.embedding, face, transfers,
         Dictionary(face, [bond(env, edge) for edge in face]);
         maxdim, alg, reference = get(env.bases, face, nothing)
     )
     set_face_corners!(env, face, corners)
     set_face_bases!(env, face, bases)
-    set_face_edges!(env, face, transfers, cut, bases)
+    set_face_edges!(env, face, transfers, bases)
     return env
 end
