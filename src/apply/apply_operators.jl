@@ -247,12 +247,14 @@ end
 function apply_gate_bp_nsite!(
         ::Val{2}, dest::AbstractITensorNetwork, op::AbstractITensor,
         state::AbstractITensorNetwork, env, vertices;
-        trunc, normalize
+        trunc, normalize, bondnames = nothing
     )
     v1, v2 = vertices
     Q_v1, R_v1, invsqrt_messages_v1 = bp_gate_factorize(op, state, env, v1, v2)
     Q_v2, R_v2, invsqrt_messages_v2 = bp_gate_factorize(op, state, env, v2, v1)
-    R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(op, R_v1, R_v2; trunc, normalize)
+    R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
+        op, R_v1, R_v2; trunc, normalize, bondnames
+    )
     dest[v1] = bp_gate_restore(Q_v1, R_v1, invsqrt_messages_v1)
     dest[v2] = bp_gate_restore(Q_v2, R_v2, invsqrt_messages_v2)
     env[v1 => v2] = message_v1v2
