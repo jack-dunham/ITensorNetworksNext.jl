@@ -13,11 +13,11 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
-corner(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
+cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # `c[edge]` and the corner before it in the same face share exactly the bond of `edge`.
 function bond(env::CTMEnvironment, edge)
     previous = prevedge(env.embedding, edge)
-    return only(commoninds(corner(env, edge), corner(env, previous)))
+    return only(commoninds(cornertensor(env, edge), cornertensor(env, previous)))
 end
 
 # Two-index tensor over `row` and `column` with `diagonal` on its diagonal; every corner is one.
@@ -31,7 +31,7 @@ end
 
 function corner_diagonal(env::CTMEnvironment, edge)
     row, column = bond(env, edge), bond(env, nextedge(env.embedding, edge))
-    tensor = corner(env, edge)
+    tensor = cornertensor(env, edge)
     return [tensor[row => k, column => k] for k in 1:length(row)]
 end
 
@@ -77,7 +77,7 @@ function environment_tensors(env::CTMEnvironment, vertex; exclude = ())
     return [
         [edgetensor(env, edge) for edge in incoming];
         [
-            corner(env, edge) for
+            cornertensor(env, edge) for
                 edge in incoming if dst(nextedge(embedding, edge)) ∉ exclude
         ]
     ]
@@ -89,8 +89,8 @@ function environment_tensors(env::CTMEnvironment, edge::Union{AbstractEdge, Pair
     backward = reverse(forward)
     return [
         edgetensor(env, forward), edgetensor(env, backward),
-        corner(env, forward), corner(env, prevedge(embedding, forward)),
-        corner(env, backward), corner(env, prevedge(embedding, backward)),
+        cornertensor(env, forward), cornertensor(env, prevedge(embedding, forward)),
+        cornertensor(env, backward), cornertensor(env, prevedge(embedding, backward)),
     ]
 end
 
