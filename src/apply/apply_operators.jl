@@ -193,25 +193,28 @@ function default_algorithm(
 end
 
 """
-    BeliefPropagationEnvironment(; when = StopWhenVertexRevisited(), kwargs...)
+    BeliefPropagationEnvironmentPreparation(; when = StopWhenVertexRevisited(), kwargs...)
 
 Environment preparation that runs [`beliefpropagation`](@ref) on the environment before a
 gate whenever the stopping criterion `when` is met, counting only the gates applied since
 belief propagation last ran. `kwargs` are forwarded to `beliefpropagation` and must include
 its `stopping_criterion`.
 """
-struct BeliefPropagationEnvironment{When <: AI.StoppingCriterion, Kwargs <: NamedTuple} <:
-    AbstractAlgorithm
+struct BeliefPropagationEnvironmentPreparation{
+        When <: AI.StoppingCriterion, Kwargs <: NamedTuple,
+    } <: AbstractAlgorithm
     when::When
     kwargs::Kwargs
 end
-function BeliefPropagationEnvironment(; when = StopWhenVertexRevisited(), kwargs...)
-    return BeliefPropagationEnvironment(when, (; kwargs...))
+function BeliefPropagationEnvironmentPreparation(;
+        when = StopWhenVertexRevisited(), kwargs...
+    )
+    return BeliefPropagationEnvironmentPreparation(when, (; kwargs...))
 end
 
 # `iteration` counts the gates applied since belief propagation last ran;
 # `operator_index` is the index in `problem.operators` of the next gate.
-@kwdef mutable struct BeliefPropagationEnvironmentState{
+@kwdef mutable struct BeliefPropagationEnvironmentPreparationState{
         Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
     } <: AI.State
     iterate::Iterate
@@ -221,16 +224,18 @@ end
 end
 
 function initialize_environment_state(
-        environment_algorithm::BeliefPropagationEnvironment, problem, algorithm; iterate
+        environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm;
+        iterate
     )
     stopping_criterion_state = AI.initialize_state(
         problem, algorithm, environment_algorithm.when; iterate
     )
-    return BeliefPropagationEnvironmentState(; iterate, stopping_criterion_state)
+    return BeliefPropagationEnvironmentPreparationState(; iterate, stopping_criterion_state)
 end
 
 function apply_operator_environment_preparation(
-        environment_algorithm::BeliefPropagationEnvironment, problem, algorithm, state
+        environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
+        state
     )
     environment_state = state.environment_state
     environment_state.iterate = state.iterate
@@ -256,10 +261,12 @@ end
     environment_beliefpropagation(environment_algorithm, problem, algorithm, state) -> env
 
 The environment after running belief propagation on `state.env` with the norm network of
-`state.iterate`, called by [`BeliefPropagationEnvironment`](@ref) when its criterion is met.
+`state.iterate`, called by [`BeliefPropagationEnvironmentPreparation`](@ref) when its
+criterion is met.
 """
 function environment_beliefpropagation(
-        environment_algorithm::BeliefPropagationEnvironment, problem, algorithm, state
+        environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
+        state
     )
     return beliefpropagation(
         NormNetwork(state.iterate, branamemap(state.env)), state.env;
@@ -270,9 +277,9 @@ end
 """
     StopWhenVertexRevisited()
 
-Stopping criterion for [`BeliefPropagationEnvironment`](@ref), met when the next operator
-acts on two vertices and one of them was updated since belief propagation last ran.
-Vertices come from [`operator_vertices`](@ref).
+Stopping criterion for [`BeliefPropagationEnvironmentPreparation`](@ref), met when the next
+operator acts on two vertices and one of them was updated since belief propagation last
+ran. Vertices come from [`operator_vertices`](@ref).
 """
 struct StopWhenVertexRevisited <: AI.StoppingCriterion end
 
@@ -296,7 +303,7 @@ end
 
 function AI.is_finished(
         problem::ApplyOperatorsProblem, algorithm::ApplyOperatorsAlgorithm,
-        state::BeliefPropagationEnvironmentState, ::StopWhenVertexRevisited,
+        state::BeliefPropagationEnvironmentPreparationState, ::StopWhenVertexRevisited,
         st::StopWhenVertexRevisitedState
     )
     vertices = operator_vertices(
@@ -309,7 +316,7 @@ end
 # applied right after belief propagation runs is recorded even though the state was reset.
 function AI.is_finished!(
         problem::ApplyOperatorsProblem, algorithm::ApplyOperatorsAlgorithm,
-        state::BeliefPropagationEnvironmentState, c::StopWhenVertexRevisited,
+        state::BeliefPropagationEnvironmentPreparationState, c::StopWhenVertexRevisited,
         st::StopWhenVertexRevisitedState
     )
     if state.iteration > 0

@@ -3,7 +3,7 @@ using GradedArrays: U1, gradedrange
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, outputnames,
     setname, uniquename
-using ITensorNetworksNext: ITensorNetworksNext, BeliefPropagationEnvironment,
+using ITensorNetworksNext: ITensorNetworksNext, BeliefPropagationEnvironmentPreparation,
     MessageUpdateAlgorithm, NormNetwork, SimpleMessageUpdate, StopWhenVertexRevisited,
     apply_operator, apply_operators, beliefpropagation, bp_gate_factorize, bp_gate_restore,
     bp_gate_split, branamemap, insertlink!, message_environment, tensornetwork
@@ -147,7 +147,7 @@ end
     end
 end
 
-@testset "BeliefPropagationEnvironment (T=$T)" for T in (Float64, ComplexF64)
+@testset "BeliefPropagationEnvironmentPreparation (T=$T)" for T in (Float64, ComplexF64)
     rng = StableRNG(123)
     g = named_path_graph(4)
     site_axes = Dict(v => Index(spinone) for v in vertices(g))
@@ -171,7 +171,7 @@ end
     count[] = 0
 
     @testset "StopWhenVertexRevisited matches explicit belief propagation" begin
-        environment_alg = BeliefPropagationEnvironment(; bp_kwargs...)
+        environment_alg = BeliefPropagationEnvironmentPreparation(; bp_kwargs...)
         gated, gated_env = apply_operators(gates, network, env; environment_alg, trunc)
         # Gates 3, 5 and 7 each act on a vertex updated since belief propagation last ran.
         @test count[] == 3 * updates_per_run
@@ -201,14 +201,14 @@ end
 
     @testset "StopAfterIteration($k) runs belief propagation every $k gates" for k in 1:3
         when = AI.StopAfterIteration(k)
-        environment_alg = BeliefPropagationEnvironment(; when, bp_kwargs...)
+        environment_alg = BeliefPropagationEnvironmentPreparation(; when, bp_kwargs...)
         apply_operators(gates, network, env; environment_alg, trunc)
         @test count[] == div(length(gates) - 1, k) * updates_per_run
         count[] = 0
     end
 
     @testset "converged messages name the bond shared with the vertex" begin
-        environment_alg = BeliefPropagationEnvironment(; bp_kwargs...)
+        environment_alg = BeliefPropagationEnvironmentPreparation(; bp_kwargs...)
         gated, gated_env = apply_operators(gates[1:3], network, env; environment_alg, trunc)
         count[] = 0
         for edge in edges(gated_env)
