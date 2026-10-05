@@ -291,9 +291,10 @@ end
 Message update for a `NormNetwork` or a `QuadraticFormNetwork` that splits the outgoing ket leg of each message into `nblocks`
 column blocks of near-equal length, so each intermediate is about `1 / nblocks` of the ket. An
 `nblocks` larger than the leg's length gives one column per block, and `nblocks = nothing` chooses
-it per message from the contraction backend and the ket's size. Requires TensorOperations to be
-loaded. Every contraction runs with `contract_alg`, and intermediates are allocated and freed
-through its allocator. `workspace_limit` is reserved and must be `nothing`.
+it per message from the contraction backend and the ket's size. The default `contract_alg` requires
+TensorOperations to be loaded. Every contraction runs with `contract_alg`, and with a
+`TensorOperationsContract` intermediates are allocated and freed through its allocator.
+`workspace_limit` is reserved and must be `nothing`.
 """
 @kwdef struct BlockedMessageUpdate{ContractAlg} <: MessageUpdateAlgorithm
     normalize::Bool = true
@@ -319,12 +320,20 @@ end
     default_nblocks(backend, ketbytes::Integer, χ::Integer) -> Int
 
 The number of column blocks `algorithm` splits a leg of length `χ` of the ket array `ket` into;
-the kernel caps it at `χ`. The first form returns `algorithm.nblocks` when it is set; for `nothing` it finds the
-TensorOperations backend `algorithm.contract_alg` contracts with and calls the second, which a
-backend overloads. Defined by the TensorOperations extension: 1 (the whole leg) by default, and on
+the kernel caps it at `χ`. The first form returns `algorithm.nblocks` when it is set; for `nothing`
+and a `TensorOperationsContract` it finds the TensorOperations backend `algorithm.contract_alg`
+contracts with and calls the second, which a backend overloads, and otherwise returns 1. The
+second form is defined by the TensorOperations extension: 1 (the whole leg) by default, and on
 cuTENSOR about 16 blocks, each at least 4 MiB and at most 64 columns.
 """
 function default_nblocks end
+function default_nblocks(algorithm::BlockedMessageUpdate, ket::AbstractArray, χ::Integer)
+    return @something algorithm.nblocks 1
+end
+
+# Rejects operands whose element types the backend `alg` contracts with cannot mix, before any
+# contraction runs. The TensorOperations extension overloads it for cuTENSOR.
+check_element_types(alg, tensors) = nothing
 
 function message_update!(
         algorithm::BlockedMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
