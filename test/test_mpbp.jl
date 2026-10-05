@@ -4,7 +4,7 @@ using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: CornerTransferProduct, DenseEig, ITensorNetwork,
     SubspaceIteration, beliefpropagation, bethe_free_entropy, bond, contract_network,
     ctm_environment, ctmrg, expect, face_update!, hexagonal_position, invariant_subspace,
-    leftface, linkinds, next_edge, normnetwork, planar_embedding, prev_edge, tensornetwork,
+    leftface, linkinds, nextedge, normnetwork, planar_embedding, prevedge, tensornetwork,
     vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
@@ -244,8 +244,8 @@ const LATTICES = (
         # Legs in a fixed order, since every update makes new bond indices.
         function edge_array(d)
             legs = (
-                linkinds(tn, d)..., bond(env, next_edge(emb, d)),
-                bond(env, prev_edge(emb, reverse(d))),
+                linkinds(tn, d)..., bond(env, nextedge(emb, d)),
+                bond(env, prevedge(emb, reverse(d))),
             )
             return unnamed(align(env.edgetensors[d], name.(legs)))
         end
