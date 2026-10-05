@@ -2,8 +2,8 @@ using DataGraphs: DataGraphs, AbstractDataGraph, AbstractEdgeDataGraph, edge_dat
     edge_data_type, set_vertex_data!, underlying_graph, underlying_graph_type, vertex_data,
     vertex_data_type
 using Dictionaries: Dictionary, getindices, set!, unset!
-using Graphs: AbstractGraph, connected_components, is_directed, is_tree
-using ITensorBase: state, unnamed
+using Graphs: AbstractGraph, connected_components, edges, is_directed, is_tree
+using ITensorBase: inputnames, outputnames, state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
     boundary_edges, in_incident_edges, to_graph_index, vertextype
 using SplitApplyCombine: mapmany
@@ -187,6 +187,20 @@ end
 bethe_free_energy(factors, messages) = -bethe_free_entropy(factors, messages)
 
 # ===================================== NormNetwork ====================================== #
+
+# Each message maps its input (ket) names to its output (bra) names; both messages on an edge
+# carry the same pair.
+function branamemap(messages::MessageCache)
+    pairs = [
+        ket => bra for e in edges(messages) for
+            (ket, bra) in zip(inputnames(messages[e]), outputnames(messages[e]))
+    ]
+    map = Dictionary{eltype(first.(pairs)), eltype(last.(pairs))}()
+    for (ket, bra) in pairs
+        set!(map, ket, bra)
+    end
+    return map
+end
 
 function similar_message_environment(nn::NormNetwork)
     messages = mapmany(vertices(nn)) do vertex

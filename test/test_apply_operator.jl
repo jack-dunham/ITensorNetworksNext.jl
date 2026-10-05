@@ -1,10 +1,13 @@
+using AlgorithmsInterface: AlgorithmsInterface as AI
 using GradedArrays: U1, gradedrange
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, outputnames,
     setname, uniquename
-using ITensorNetworksNext: NormNetwork, apply_operator, apply_operators,
-    bp_gate_factorize, bp_gate_restore, bp_gate_split, insertlink!, message_environment,
-    tensornetwork
+using ITensorNetworksNext: ITensorNetworksNext, BeliefPropagationEnvironment,
+    MessageUpdateAlgorithm, NormNetwork, SimpleMessageUpdate, StopWhenVertexRevisited,
+    apply_operator, apply_operators, beliefpropagation, bp_gate_factorize, bp_gate_restore,
+    bp_gate_split, branamemap, insertlink!, message_environment, tensornetwork
+using LinearAlgebra: norm
 using MatrixAlgebraKit: svd_trunc, truncrank
 using NamedGraphs: named_cycle_graph, named_path_graph
 using Random: AbstractRNG
@@ -43,6 +46,17 @@ function random_state(rng::AbstractRNG, elt::Type, g, site_axes; nlayers, trunc)
         network, env = apply_operator(gate, network, env; trunc)
     end
     return network, env
+end
+
+# Counts the single-edge updates belief propagation performs.
+struct CountingMessageUpdate <: MessageUpdateAlgorithm
+    count::Base.RefValue{Int}
+end
+function ITensorNetworksNext.message_update!(
+        algorithm::CountingMessageUpdate, cache, factors, edge
+    )
+    algorithm.count[] += 1
+    return ITensorNetworksNext.message_update!(SimpleMessageUpdate(), cache, factors, edge)
 end
 
 @testset "apply_operator (T=$T, $label)" for (label, site_range) in (
@@ -129,6 +143,78 @@ end
             sqrt_message, invsqrt_message = sqrth_invsqrth_safe(env[edge])
             @test apply(invsqrt_message, apply(sqrt_message, network[v])) ≈ network[v] rtol =
                 rtol
+        end
+    end
+end
+
+@testset "BeliefPropagationEnvironment (T=$T)" for T in (Float64, ComplexF64)
+    rng = StableRNG(123)
+    g = named_path_graph(4)
+    site_axes = Dict(v => Index(spinone) for v in vertices(g))
+    network, env = random_state(rng, T, g, site_axes; nlayers = 2, trunc = truncrank(4))
+    two_site(v1, v2) = randn_operator(rng, T, (site_axes[v1], site_axes[v2]))
+    one_site(v) = randn_operator(rng, T, (site_axes[v],))
+    gates = [
+        two_site(1, 2), two_site(3, 4), two_site(2, 3), one_site(1),
+        two_site(1, 2), two_site(3, 4), two_site(2, 3),
+    ]
+    trunc = truncrank(2)
+    maxiter = 3
+
+    count = Ref(0)
+    bp_kwargs = (;
+        stopping_criterion = (; maxiter),
+        message_update_algorithm = CountingMessageUpdate(count),
+    )
+    beliefpropagation(NormNetwork(network, branamemap(env)), env; bp_kwargs...)
+    updates_per_run = count[]
+    count[] = 0
+
+    @testset "StopWhenVertexRevisited matches explicit belief propagation" begin
+        environment_alg = BeliefPropagationEnvironment(; bp_kwargs...)
+        gated, gated_env = apply_operators(gates, network, env; environment_alg, trunc)
+        # Gates 3, 5 and 7 each act on a vertex updated since belief propagation last ran.
+        @test count[] == 3 * updates_per_run
+        count[] = 0
+
+        reference, reference_env = network, env
+        for chunk in (1:2, 3:4, 5:6, 7:7)
+            if first(chunk) > 1
+                reference_env = beliefpropagation(
+                    NormNetwork(reference, branamemap(reference_env)), reference_env;
+                    bp_kwargs...
+                )
+            end
+            reference, reference_env =
+                apply_operators(gates[chunk], reference, reference_env; trunc)
+        end
+        count[] = 0
+        # The two runs mint different bond names, so compare name-independent quantities.
+        @test norm(prod(gated) - prod(reference)) <= 1.0e-12 * norm(prod(reference))
+        # Without belief propagation the truncations differ.
+        ungated, _ = apply_operators(gates, network, env; trunc)
+        @test norm(prod(ungated) - prod(reference)) > 1.0e-6 * norm(prod(reference))
+        for edge in edges(gated_env)
+            @test norm(gated_env[edge]) ≈ norm(reference_env[edge]) rtol = 1.0e-12
+        end
+    end
+
+    @testset "StopAfterIteration($k) runs belief propagation every $k gates" for k in 1:3
+        when = AI.StopAfterIteration(k)
+        environment_alg = BeliefPropagationEnvironment(; when, bp_kwargs...)
+        apply_operators(gates, network, env; environment_alg, trunc)
+        @test count[] == div(length(gates) - 1, k) * updates_per_run
+        count[] = 0
+    end
+
+    @testset "converged messages name the bond shared with the vertex" begin
+        environment_alg = BeliefPropagationEnvironment(; bp_kwargs...)
+        gated, gated_env = apply_operators(gates[1:3], network, env; environment_alg, trunc)
+        count[] = 0
+        for edge in edges(gated_env)
+            message = gated_env[edge]
+            @test only(intersect(names(gated[dst(edge)]), names(message))) ==
+                only(inputnames(message))
         end
     end
 end
