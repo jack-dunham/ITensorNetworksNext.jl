@@ -4,8 +4,9 @@ using Graphs: src
 using ITensorBase: ITensorBase, ITensor, inds, inputnames, mulopadd!, names, outputnames,
     rename, state, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, AbstractBilinearFormNetwork,
-    BlockedMessageUpdate, NormGramian, QuadraticFormGramian, braname, default_nblocks,
-    incoming_messages, kettensor, operatortensor, prod_tensors!, updated_message
+    BlockedMessageUpdate, NormGramian, QuadraticFormGramian, braname, check_element_types,
+    default_nblocks, incoming_messages, kettensor, operatortensor, prod_tensors!,
+    updated_message
 using TensorAlgebra: TensorOperationsContract
 using TensorOperations: TensorOperations as TO
 
@@ -17,10 +18,10 @@ end
 function contract_backend(alg::TensorOperationsContract, a)
     return @something alg.backend TO.select_backend(TO.tensorcontract!, a, a, a)
 end
-contract_backend(alg, a) = nothing
 
 function ITensorNetworksNext.default_nblocks(
-        algorithm::BlockedMessageUpdate, ket::AbstractArray, χ::Integer
+        algorithm::BlockedMessageUpdate{<:TensorOperationsContract}, ket::AbstractArray,
+        χ::Integer
     )
     return @something algorithm.nblocks default_nblocks(
         contract_backend(algorithm.contract_alg, ket),
@@ -63,8 +64,7 @@ function message_contraction_tensors(algorithm, factor::QuadraticFormGramian, me
     return checked_tensors(algorithm, kettensor(factor), rest)
 end
 
-# Non-dense storage cannot be sliced by column. cuTENSOR throws `KeyError` when a contraction
-# mixes element types, so that is rejected here rather than partway through a message.
+# Non-dense storage cannot be sliced by column.
 function checked_tensors(algorithm, ket, rest)
     tensors = [ket; rest]
     for t in tensors
@@ -74,7 +74,14 @@ function checked_tensors(algorithm, ket, rest)
             )
         )
     end
-    backend = contract_backend(algorithm.contract_alg, unnamed(ket))
+    check_element_types(algorithm.contract_alg, tensors)
+    return ket, rest
+end
+
+# cuTENSOR throws `KeyError` when a contraction mixes element types, so that is rejected here
+# rather than partway through a message.
+function ITensorNetworksNext.check_element_types(alg::TensorOperationsContract, tensors)
+    backend = contract_backend(alg, unnamed(first(tensors)))
     if backend isa TO.cuTENSORBackend && !allequal(eltype, tensors)
         throw(
             ArgumentError(
@@ -83,7 +90,7 @@ function checked_tensors(algorithm, ket, rest)
             )
         )
     end
-    return ket, rest
+    return nothing
 end
 
 # As in `TO.ncon`, each intermediate is an allocator temporary, freed once the next step reads it.
