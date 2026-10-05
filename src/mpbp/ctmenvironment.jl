@@ -6,14 +6,14 @@ using NamedGraphs: NamedEdge, all_edges
 struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
     embedding::PlanarEmbedding{V}
     edgetensors::E
-    corners::C
+    cornertensors::C
     # Each face's `(right_basis, left_basis)` from its last update, which the next one aligns
     # onto and `SubspaceIteration` starts from.
     bases::Dict{NamedFace{V}, Tuple{AbstractMatrix, AbstractMatrix}}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
-corner(env::CTMEnvironment, edge) = env.corners[NamedEdge(edge)]
+corner(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # `c[edge]` and the corner before it in the same face share exactly the bond of `edge`.
 function bond(env::CTMEnvironment, edge)
     previous = prevedge(env.embedding, edge)
@@ -37,7 +37,7 @@ end
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
-        env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
+        env.embedding, map(identity, env.edgetensors), map(identity, env.cornertensors),
         copy(env.bases)
     )
 end
@@ -95,7 +95,7 @@ function environment_tensors(env::CTMEnvironment, edge::Union{AbstractEdge, Pair
 end
 
 function environment_tensors(env::CTMEnvironment, face::NamedFace)
-    return view(env.corners, face)
+    return view(env.cornertensors, face)
 end
 
 function kikuchi_terms(tn, env::CTMEnvironment)

@@ -131,7 +131,7 @@ end
 
 function set_face_corners!(env::CTMEnvironment, face, corners, bases)
     for edge in face
-        env.corners[edge] = corners[edge]
+        env.cornertensors[edge] = corners[edge]
     end
     env.bases[face] = bases
     return env
