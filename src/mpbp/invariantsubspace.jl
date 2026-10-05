@@ -137,17 +137,18 @@ Dominant invariant subspace of `matrix`: `matrix * right_basis ≈ right_basis *
 `left_basis * matrix ≈ Diagonal(eigenvalues) * left_basis` and `left_basis * right_basis ≈ I`.
 Eigenvalues of equal modulus are kept or dropped together.
 
-With a `reference` right basis of the same size, the basis is rotated onto it within blocks of
-eigenvalues equal to relative tolerance `alg.degeneracy_rtol`, and the eigenvalues follow the
-reference's order.
+With `reference = (right_basis, left_basis)` from a previous call of the same size, the right
+basis is rotated onto the reference's within blocks of eigenvalues equal to relative tolerance
+`alg.degeneracy_rtol`, and the eigenvalues follow the reference's order.
 """
 function invariant_subspace(alg::DenseEig, matrix, maxdim::Integer; reference = nothing)
     result = AI.solve(InvariantSubspaceProblem(matrix, maxdim), DenseEigensolve(alg))
-    return if isnothing(reference)
-        result
-    else
-        align_bases(result..., reference, alg.degeneracy_rtol)
-    end
+    return aligned(result, reference, alg)
+end
+
+function aligned(result, reference, alg)
+    isnothing(reference) && return result
+    return align_bases(result..., first(reference), alg.degeneracy_rtol)
 end
 
 # One dense eigendecomposition, run as a single step; the iterate is the kept
@@ -194,8 +195,8 @@ end
 """
     SubspaceIteration(; oversampling = 2, tol = 1.0e-12, maxiter = 1000, seed = 0, rtol, degeneracy_rtol)
 
-Two-sided block subspace iteration with `maxdim + oversampling` vectors, started from random
-blocks drawn with `seed`. It reads `matrix` only through `matrix * block` and `block * matrix`,
+Two-sided block subspace iteration with `maxdim + oversampling` vectors, started from a
+`reference` pair of bases when one is given, and otherwise from random blocks drawn with `seed`. It reads `matrix` only through `matrix * block` and `block * matrix`,
 so `matrix` can be a `CornerTransferProduct`. It stops once the kept Ritz pairs have relative
 residual below `tol` on both sides, and throws after `maxiter` iterations otherwise.
 """
@@ -329,16 +330,20 @@ function invariant_subspace(
     dim = size(matrix, 1)
     nblock = min(dim, maxdim + alg.oversampling)
     rng = Xoshiro(alg.seed)
-    right = orthonormal_columns(randn(rng, eltype(matrix), dim, nblock))
-    left = transpose(orthonormal_columns(randn(rng, eltype(matrix), dim, nblock)))
+    # A reference basis is padded with random columns up to the block size.
+    function start(columns)
+        filler = randn(rng, eltype(matrix), dim, nblock - min(nblock, size(columns, 2)))
+        return orthonormal_columns(hcat(columns[:, 1:min(nblock, end)], filler))
+    end
+    usable = !isnothing(reference) && size(first(reference), 1) == dim
+    right = start(usable ? first(reference) : zeros(eltype(matrix), dim, 0))
+    left = transpose(
+        start(usable ? transpose(last(reference)) : zeros(eltype(matrix), dim, 0))
+    )
 
     problem = InvariantSubspaceProblem(matrix, maxdim)
     stopping_criterion = AI.StopAfterIteration(alg.maxiter) | StopWhenResidualBelow(alg.tol)
     algorithm = RayleighRitzIteration(alg, stopping_criterion)
     result = AI.solve(problem, algorithm; iterate = (right, left))
-    return if isnothing(reference)
-        result
-    else
-        align_bases(result..., reference, alg.degeneracy_rtol)
-    end
+    return aligned(result, reference, alg)
 end

@@ -84,23 +84,24 @@ function inverse(tensor)
 end
 
 """
-    face_solve(embedding, face, transfers, cut, bonds; maxdim, alg, previous_basis = nothing)
-        -> corners, projectors, right_basis
+    face_solve(embedding, face, transfers, cut, bonds; maxdim, alg, reference = nothing)
+        -> corners, projectors, bases
 
 Solve `face`, given as its cycle of directed edges, from its normalised corner transfer
 tensors `transfers` keyed by edge, the indices `cut` of the cut at its last edge, and its
 current bond indices `bonds`, which are kept while the bond dimension is unchanged. Reads no
 environment, so the transfer tensors can be computed by whichever ranks own the vertices.
-The new basis is aligned onto `previous_basis` when one is given. `projectors` holds the
-right and left projectors at each edge of the face.
+`projectors` holds the right and left projectors at each edge of the face, and `bases` the
+`(right_basis, left_basis)` of its invariant subspace, which a later solve takes as `reference`
+to align onto and, for `SubspaceIteration`, to start from.
 """
 function face_solve(
         embedding, face, transfers, cut, bonds;
-        maxdim::Integer, alg::AbstractAlgorithm, previous_basis = nothing
+        maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
     )
     product = CornerTransferProduct(collect(transfers), cut)
     right_basis, left_basis, eigenvalues =
-        invariant_subspace(alg, product, maxdim; reference = previous_basis)
+        invariant_subspace(alg, product, maxdim; reference)
     bond_dim = length(eigenvalues)
 
     # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
@@ -134,7 +135,7 @@ function face_solve(
         embedding, face, transfers, corners, new_bonds, cut,
         Diagonal(inv.(roots)) * left_basis
     )
-    return corners, (right_projectors, left_projectors), right_basis
+    return corners, (right_projectors, left_projectors), (right_basis, left_basis)
 end
 
 # Writes the edge tensors of `face`'s edges in both directions. It reads the neighbouring
@@ -153,11 +154,11 @@ function set_face_edge_tensors!(
     return env
 end
 
-function set_face_corners!(env::CTMEnvironment, face, corners, right_basis)
+function set_face_corners!(env::CTMEnvironment, face, corners, bases)
     for edge in face
         env.corners[edge] = corners[edge]
     end
-    env.right_bases[face] = right_basis
+    env.bases[face] = bases
     return env
 end
 
@@ -175,13 +176,13 @@ function face_update!(
         maxdim::Integer,
         alg::AbstractAlgorithm
     )
-    corners, projectors, right_basis = face_solve(
+    corners, projectors, bases = face_solve(
         env.embedding, face, transfer_tensors(tn, env, face),
         cut_inds(tn, env, last(face)),
         Dictionary(face, [bond(env, edge) for edge in face]);
-        maxdim, alg, previous_basis = get(env.right_bases, face, nothing)
+        maxdim, alg, reference = get(env.bases, face, nothing)
     )
     set_face_edge_tensors!(env, face, projectors)
-    set_face_corners!(env, face, corners, right_basis)
+    set_face_corners!(env, face, corners, bases)
     return env
 end
