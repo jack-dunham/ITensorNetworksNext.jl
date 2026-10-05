@@ -1,6 +1,6 @@
 using Dictionaries: Dictionary, set!
 using Graphs: dst, src
-using ITensorBase: Index, commoninds, inds, name, names, state
+using ITensorBase: ITensorBase, Index, commoninds, inds, name, names, state
 using LinearAlgebra: Diagonal, inv, norm, opnorm
 using TensorAlgebra: unmatricize
 
@@ -22,11 +22,11 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
         end
     end
 
-    @assert issetequal(
-        names(transfer),
-        name.((cut_inds(tn, env, incoming)..., cut_inds(tn, env, outgoing)...))
-    )
-    return transfer
+    # A fixed leg order, the incoming cut then the outgoing one, lets `face_cut` read the cut off
+    # the legs in an order that does not depend on how the contraction laid them out.
+    legs = name.((cut_inds(tn, env, incoming)..., cut_inds(tn, env, outgoing)...))
+    @assert issetequal(names(transfer), legs)
+    return ITensorBase.align(state(transfer), legs)
 end
 
 # Normalised transfer tensor at each edge of `face`.
@@ -41,12 +41,9 @@ end
 
 # Right projector at each edge of `face`, carried backwards from `right_basis` at the last
 # edge and divided by a corner at each step; it has the bond of the face edge before it.
-# The cut at `face`'s last edge: the indices its last and first transfer tensors share, sorted
-# by name so the stored bases' rows keep one order however the transfer tensors are laid out.
-function face_cut(face, transfers)
-    shared = commoninds(transfers[last(face)], transfers[first(face)])
-    return Tuple(sort(collect(shared); by = name))
-end
+# The cut at `face`'s last edge: the indices its last and first transfer tensors share, in the
+# order of the last one's legs, which `corner_transfer_matrix` fixes.
+face_cut(face, transfers) = Tuple(commoninds(transfers[last(face)], transfers[first(face)]))
 
 function right_blocks(env::CTMEnvironment, face, transfers, right_basis)
     embedding = env.embedding
