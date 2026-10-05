@@ -1,6 +1,6 @@
 using AbstractTrees: nodevalue
 using Combinatorics: combinations
-using ITensorBase: inds
+using ITensorBase: ITensor, dim, inds, mulopadd!, names, unnamed
 
 """
     ContractionTreeAlgorithm
@@ -29,6 +29,21 @@ function prod_tensors(tensors, tree::ContractionTree)
 end
 function prod_tensors(tensors, alg::ContractionTreeAlgorithm)
     return prod_tensors(tensors, contraction_tree(alg, tensors))
+end
+
+# `y = x * xs...` left to right with `alg`, conjugating the operands flagged in `conjlist`.
+function prod_tensors!(alg, y, x, xs...; conjlist = falses(length(xs) + 1))
+    op(i) = conjlist[i] ? conj : identity
+    opx = op(1)
+    for (i, m) in enumerate(Base.front(xs))
+        labels = Tuple(symdiff(names(x), names(m)))
+        dims = map(n -> n in names(x) ? size(x, dim(x, n)) : size(m, dim(m, n)), labels)
+        T = promote_type(eltype(x), eltype(m))
+        z = ITensor(similar(unnamed(x), T, dims), labels)
+        mulopadd!(z, opx, x, op(i + 1), m, true, false; alg)
+        x, opx = z, identity
+    end
+    return mulopadd!(y, opx, x, op(length(xs) + 1), last(xs), true, false; alg)
 end
 
 # The tree that folds `labels` from the left, so `(a, b, c)` gives `((a, b), c)`.
