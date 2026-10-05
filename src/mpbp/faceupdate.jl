@@ -1,5 +1,5 @@
 using Dictionaries: Dictionary, set!
-using Graphs: AbstractEdge, dst, src
+using Graphs: dst, src
 using ITensorBase: Index, inds, name, names, state
 using LinearAlgebra: Diagonal, inv, norm, opnorm
 using TensorAlgebra: unmatricize
@@ -30,7 +30,7 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
 end
 
 # Normalised transfer tensor at each edge of `face`.
-function transfer_tensors(tn, env::CTMEnvironment, face::AbstractVector{<:AbstractEdge})
+function transfer_tensors(tn, env::CTMEnvironment, face::NamedFace)
     transfers = map(face) do edge
         # `state` drops the operator pairing a `NormNetwork` vertex tensor carries.
         transfer = state(corner_transfer_matrix(tn, env, edge))
@@ -89,7 +89,7 @@ end
     face_solve(embedding, face, transfers, cut, bonds; maxdim, alg, reference = nothing)
         -> corners, bases
 
-Solve `face`, given as its cycle of directed edges, from its normalised corner transfer
+Solve the `NamedFace` `face` from its normalised corner transfer
 tensors `transfers` keyed by edge, the indices `cut` of the cut at its last edge, and its
 current bond indices `bonds`, which are kept while the bond dimension is unchanged. Reads no
 environment, so the transfer tensors can be computed by whichever ranks own the vertices.
@@ -167,14 +167,13 @@ end
 """
     face_update!(env, tn, face; maxdim, alg) -> env
 
-Replace the corners, bonds and edge tensors of `face`, given as its cycle of directed edges,
-with the MP-BP solution of the face given the rest of `env`. The new subspace basis is aligned
+Replace the corners, bonds and edge tensors of the `NamedFace` `face` with the MP-BP solution of the face given the rest of `env`. The new subspace basis is aligned
 onto the one from the face's previous update, so the edge tensors converge entry by entry.
 """
 function face_update!(
         env::CTMEnvironment,
         tn,
-        face::AbstractVector{<:AbstractEdge};
+        face::NamedFace;
         maxdim::Integer,
         alg::AbstractAlgorithm
     )
