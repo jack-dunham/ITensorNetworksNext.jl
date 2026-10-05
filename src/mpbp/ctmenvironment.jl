@@ -7,8 +7,9 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
     embedding::PlanarEmbedding{V}
     edgetensors::E
     corners::C
-    # Each face's right basis from its last update, onto which `face_update!` aligns the next.
-    right_bases::Dict{Vector{NamedEdge{V}}, AbstractMatrix}
+    # Each face's `(right_basis, left_basis)` from its last update, which the next one aligns
+    # onto and `SubspaceIteration` starts from.
+    bases::Dict{Vector{NamedEdge{V}}, Tuple{AbstractMatrix, AbstractMatrix}}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
@@ -37,7 +38,7 @@ end
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
         env.embedding, map(identity, env.edgetensors), map(identity, env.corners),
-        copy(env.right_bases)
+        copy(env.bases)
     )
 end
 
@@ -60,7 +61,8 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     end
 
     return CTMEnvironment(
-        embedding, edgetensors, corners, Dict{eltype(embedding.faces), AbstractMatrix}()
+        embedding, edgetensors, corners,
+        Dict{eltype(embedding.faces), Tuple{AbstractMatrix, AbstractMatrix}}()
     )
 end
 
