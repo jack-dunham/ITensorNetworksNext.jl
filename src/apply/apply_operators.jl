@@ -240,9 +240,8 @@ function apply_operator_environment_preparation(
             problem, algorithm, environment_state, when,
             environment_state.stopping_criterion_state
         )
-        state.env = beliefpropagation(
-            NormNetwork(state.iterate, branamemap(state.env)), state.env;
-            environment_algorithm.kwargs...
+        state.env = environment_beliefpropagation(
+            environment_algorithm, problem, algorithm, state
         )
         environment_state.iteration = 0
         AI.initialize_state!(
@@ -251,6 +250,21 @@ function apply_operator_environment_preparation(
     end
     environment_state.iteration += 1
     return state.iterate, state.env
+end
+
+"""
+    environment_beliefpropagation(environment_algorithm, problem, algorithm, state) -> env
+
+The environment after running belief propagation on `state.env` with the norm network of
+`state.iterate`, called by [`BeliefPropagationEnvironment`](@ref) when its criterion is met.
+"""
+function environment_beliefpropagation(
+        environment_algorithm::BeliefPropagationEnvironment, problem, algorithm, state
+    )
+    return beliefpropagation(
+        NormNetwork(state.iterate, branamemap(state.env)), state.env;
+        environment_algorithm.kwargs...
+    )
 end
 
 """
