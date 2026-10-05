@@ -1,6 +1,6 @@
 using Graphs: edges, ne, nv, src
 using ITensorNetworksNext:
-    face_coloring, hexagonal_position, leftface, next_edge, planar_embedding, prev_edge
+    face_coloring, hexagonal_position, leftface, nextedge, planar_embedding, prevedge
 using NamedGraphs: all_edges, named_grid, named_hexagonal_lattice_graph
 using Test: @test, @test_throws, @testset
 
@@ -15,8 +15,8 @@ using Test: @test, @test_throws, @testset
         @test nv(g) - ne(g) + length(emb.faces) == 1
         @test length(emb.positions) == 2 * ne(g)
         for d in all_edges(g)
-            @test prev_edge(emb, next_edge(emb, d)) == d
-            @test leftface(emb, next_edge(emb, d)) == leftface(emb, d)
+            @test prevedge(emb, nextedge(emb, d)) == d
+            @test leftface(emb, nextedge(emb, d)) == leftface(emb, d)
         end
         for e in edges(g)
             fs = (leftface(emb, e), leftface(emb, reverse(e)))
