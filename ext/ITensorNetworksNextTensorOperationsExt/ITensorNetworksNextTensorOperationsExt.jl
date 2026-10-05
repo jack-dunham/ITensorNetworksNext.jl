@@ -5,7 +5,7 @@ using ITensorBase: ITensorBase, ITensor, inds, inputnames, mulopadd!, names, out
     rename, state, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, AbstractBilinearFormNetwork,
     BlockedMessageUpdate, NormGramian, QuadraticFormGramian, braname, default_nblocks,
-    incoming_messages, kettensor, operatortensor, updated_message
+    incoming_messages, kettensor, operatortensor, prod_tensors!, updated_message
 using TensorAlgebra: TensorOperationsContract
 using TensorOperations: TensorOperations as TO
 
@@ -13,7 +13,6 @@ using TensorOperations: TensorOperations as TO
 function contract_allocator(alg::TensorOperationsContract)
     return something(alg.allocator, TO.DefaultAllocator())
 end
-contract_allocator(alg) = TO.DefaultAllocator()
 
 function contract_backend(alg::TensorOperationsContract, a)
     return @something alg.backend TO.select_backend(TO.tensorcontract!, a, a, a)
@@ -87,9 +86,10 @@ function checked_tensors(algorithm, ket, rest)
     return ket, rest
 end
 
-# `y = x * xs...` left to right with `alg`, conjugating the operands flagged in `conjlist`.
 # As in `TO.ncon`, each intermediate is an allocator temporary, freed once the next step reads it.
-function prod_tensors!(y, x, xs...; alg, conjlist = falses(length(xs) + 1))
+function ITensorNetworksNext.prod_tensors!(
+        alg::TensorOperationsContract, y, x, xs...; conjlist = falses(length(xs) + 1)
+    )
     allocator = contract_allocator(alg)
     checkpoint = TO.allocator_checkpoint!(allocator)
     op(i) = conjlist[i] ? conj : identity
@@ -137,8 +137,8 @@ function ITensorNetworksNext.updated_message(
     for block in 1:nblocks
         cols = (fld((block - 1) * χ, nblocks) + 1):fld(block * χ, nblocks)
         prod_tensors!(
-            view(out, ketdimname => cols), view(ket, ketdimname => cols), rest..., bra;
-            alg = algorithm.contract_alg, conjlist
+            algorithm.contract_alg, view(out, ketdimname => cols),
+            view(ket, ketdimname => cols), rest..., bra; conjlist
         )
     end
     return out
