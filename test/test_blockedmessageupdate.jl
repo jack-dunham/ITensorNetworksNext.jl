@@ -10,7 +10,7 @@ using JLArrays: JLArray
 using LinearAlgebra: norm
 using NamedGraphs: NamedEdge, incident_edges, named_grid, named_path_graph
 using StableRNGs: StableRNG
-using TensorAlgebra: TensorOperationsContract
+using TensorAlgebra: MatricizeContract, TensorOperationsContract
 using TensorOperations: TensorOperations
 using Test: @test, @test_throws, @testset
 
@@ -191,6 +191,18 @@ end
             a -> any(f -> pointer(f) == pointer(a), allocator.freed),
             allocator.temporaries
         )
+    end
+
+    @testset "a contraction algorithm other than TensorOperations" begin
+        rng = StableRNG(1234)
+        nn = NormNetwork(random_network(rng, ComplexF64, named_grid((3, 3))))
+        cache = swept_cache(nn)
+        algorithm = BlockedMessageUpdate(; nblocks = 3, contract_alg = MatricizeContract())
+        for edge in edges(cache)
+            simple = message_update!(SimpleMessageUpdate(), map(identity, cache), nn, edge)
+            blocked = message_update!(algorithm, map(identity, cache), nn, edge)
+            @test relative_difference(blocked[edge], simple[edge]) <= 1.0e-12
+        end
     end
 
     @testset "automatic `nblocks`" begin

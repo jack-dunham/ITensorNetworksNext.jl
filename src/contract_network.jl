@@ -1,8 +1,8 @@
 using Base.Broadcast: materialize
 using Base: @kwdef
 using Dictionaries: Dictionary
-using ITensorBase: EvaluationOrderAlgorithm, Greedy, Mul, lazy, optimize_evaluation_order,
-    substitute, symnamedtensor
+using ITensorBase: EvaluationOrderAlgorithm, Greedy, ITensor, Mul, dim, lazy, mulopadd!, names,
+    optimize_evaluation_order, substitute, symnamedtensor, unnamed
 
 # `contract_network`
 @kwdef struct Exact{Order, OrderAlg}
@@ -81,4 +81,20 @@ function _contraction_order(alg, tn)
 end
 function contraction_order(alg::EvaluationOrderAlgorithm, tn)
     return _contraction_order(alg, tn)
+end
+
+# `prod_tensors!`
+# `y = x * xs...` left to right with `alg`, conjugating the operands flagged in `conjlist`.
+function prod_tensors!(alg, y, x, xs...; conjlist = falses(length(xs) + 1))
+    op(i) = conjlist[i] ? conj : identity
+    opx = op(1)
+    for (i, m) in enumerate(Base.front(xs))
+        labels = Tuple(symdiff(names(x), names(m)))
+        dims = map(n -> n in names(x) ? size(x, dim(x, n)) : size(m, dim(m, n)), labels)
+        T = promote_type(eltype(x), eltype(m))
+        z = ITensor(similar(unnamed(x), T, dims), labels)
+        mulopadd!(z, opx, x, op(i + 1), m, true, false; alg)
+        x, opx = z, identity
+    end
+    return mulopadd!(y, opx, x, op(length(xs) + 1), last(xs), true, false; alg)
 end
