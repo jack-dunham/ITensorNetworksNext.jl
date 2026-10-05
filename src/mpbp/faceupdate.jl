@@ -103,13 +103,14 @@ end
 
 """
     face_solve(face, transfers; maxdim, alg, reference = nothing)
-        -> roots, right_basis, left_basis
+        -> eigenvalues, right_basis, left_basis
 
 Solve the `NamedFace` `face` from its normalised corner transfer tensors `transfers` keyed
 by edge. Reads no environment, so the transfer tensors can be computed by whichever ranks own
-the vertices. `roots` is the diagonal every corner of the face holds; `right_basis` and
-`left_basis` span the face's invariant subspace, `face_projectors` builds the projectors from
-them, and a later solve takes the pair as `reference`.
+the vertices. `eigenvalues` are the kept eigenvalues of the product of the face's transfer
+tensors, from which `set_face_corners!` builds the corners; `right_basis` and `left_basis`
+span the invariant subspace, `face_projectors` builds the projectors from them, and a later
+solve takes the pair as `reference`.
 """
 function face_solve(
         face, transfers; maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
@@ -117,8 +118,18 @@ function face_solve(
     product = CornerTransferProduct(collect(transfers), face_cut(face, transfers))
     right_basis, left_basis, eigenvalues =
         invariant_subspace(alg, product, maxdim; reference)
-    bond_dim = length(eigenvalues)
+    # Ill-conditioned eigenvalues or bases make the edge tensors written from them inaccurate.
+    @debug(
+        "face_solve", face, bond_dim = length(eigenvalues),
+        eigenvalue_condition = maximum(abs, eigenvalues) / minimum(abs, eigenvalues),
+        projector_condition = opnorm(left_basis) * opnorm(right_basis),
+    )
+    return eigenvalues, right_basis, left_basis
+end
 
+# Writes each corner of `face`, keeping a bond's index while its dimension is unchanged. Bonds
+# are read off corners, so all are read before any is written.
+function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
     # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
     # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
     m = length(face)
@@ -127,19 +138,6 @@ function face_solve(
     else
         complex.(eigenvalues) .^ (1 / m)
     end
-    # Ill-conditioned corners or bases make the edge tensors written from them inaccurate.
-    @debug(
-        "face_solve", face, bond_dim,
-        corner_condition = maximum(abs, roots) / minimum(abs, roots),
-        projector_condition = opnorm(left_basis) * opnorm(right_basis),
-    )
-
-    return roots, right_basis, left_basis
-end
-
-# Writes each corner of `face` with `roots` on its diagonal, keeping a bond's index while its
-# dimension is unchanged. Bonds are read off corners, so all are read before any is written.
-function set_face_corners!(env::CTMEnvironment, face, roots)
     new_bonds = map(Dictionary(face, face)) do edge
         old_bond = bond(env, edge)
         return length(old_bond) == length(roots) ? old_bond : Index(length(roots))
@@ -201,11 +199,11 @@ function face_update!(
     )
     transfers = transfer_tensors(tn, env, face)
 
-    roots, right_basis, left_basis = face_solve(
+    eigenvalues, right_basis, left_basis = face_solve(
         face, transfers; maxdim, alg, reference = get(env.bases, face, nothing)
     )
 
-    set_face_corners!(env, face, roots)
+    set_face_corners!(env, face, eigenvalues)
     set_face_bases!(env, face, right_basis, left_basis)
 
     right_projectors, left_projectors = face_projectors(
