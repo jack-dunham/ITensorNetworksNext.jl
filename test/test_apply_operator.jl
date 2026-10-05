@@ -1,8 +1,10 @@
 using GradedArrays: U1, gradedrange
 using Graphs: dst, edges, src, vertices
-using ITensorBase: Index, apply, name, operator, setname, uniquename
-using ITensorNetworksNext: NormNetwork, apply_operator, apply_operators, insertlink!,
-    message_environment, tensornetwork
+using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, outputnames,
+    setname, uniquename
+using ITensorNetworksNext: NormNetwork, apply_operator, apply_operators,
+    bp_gate_factorize, bp_gate_restore, bp_gate_split, insertlink!, message_environment,
+    tensornetwork
 using MatrixAlgebraKit: svd_trunc, truncrank
 using NamedGraphs: named_cycle_graph, named_path_graph
 using Random: AbstractRNG
@@ -91,6 +93,29 @@ end
         gated, _ = apply_operators([g1, g2], network, env)
         @test prod(gated) ≈ apply(g2, apply(g1, prod(network))) rtol =
             eps(real(T))^(1 / 3)
+    end
+
+    @testset "bp_gate_split names the new bond as requested" begin
+        rng = StableRNG(123)
+        g = named_path_graph(N)
+        site_axes = Dict(v => Index(site_range) for v in vertices(g))
+        network, env = random_state(rng, T, g, site_axes; nlayers = 2, trunc = truncrank(4))
+
+        gate = randn_operator(rng, T, (site_axes[2], site_axes[3]))
+        Q_2, R_2, invsqrt_2 = bp_gate_factorize(gate, network, env, 2, 3)
+        Q_3, R_3, invsqrt_3 = bp_gate_factorize(gate, network, env, 3, 2)
+        bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
+        R_2, R_3, message_23, message_32 =
+            bp_gate_split(gate, R_2, R_3; trunc = nothing, normalize = false, bondnames)
+        @test intersect(names(R_2), names(R_3)) == [bondnames[1]]
+        for message in (message_23, message_32)
+            @test only(inputnames(message)) == bondnames[1]
+            @test only(outputnames(message)) == bondnames[2]
+        end
+        gated = copy(network)
+        gated[2] = bp_gate_restore(Q_2, R_2, invsqrt_2)
+        gated[3] = bp_gate_restore(Q_3, R_3, invsqrt_3)
+        @test prod(gated) ≈ apply(gate, prod(network)) rtol = eps(real(T))^(1 / 3)
     end
 
     @testset "message roots gauge a vertex and undo it" begin
