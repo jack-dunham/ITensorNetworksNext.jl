@@ -41,8 +41,12 @@ end
 
 # Right projector at each edge of `face`, carried backwards from `right_basis` at the last
 # edge and divided by a corner at each step; it has the bond of the face edge before it.
-# The cut at `face`'s last edge: the indices its last and first transfer tensors share.
-face_cut(face, transfers) = Tuple(commoninds(transfers[last(face)], transfers[first(face)]))
+# The cut at `face`'s last edge: the indices its last and first transfer tensors share, sorted
+# by name so the stored bases' rows keep one order however the transfer tensors are laid out.
+function face_cut(face, transfers)
+    shared = commoninds(transfers[last(face)], transfers[first(face)])
+    return Tuple(sort(collect(shared); by = name))
+end
 
 function right_blocks(env::CTMEnvironment, face, transfers, right_basis)
     embedding = env.embedding
