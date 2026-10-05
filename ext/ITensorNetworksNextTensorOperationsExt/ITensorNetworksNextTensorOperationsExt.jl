@@ -1,12 +1,7 @@
 module ITensorNetworksNextTensorOperationsExt
 
-using Graphs: src
-using ITensorBase: ITensorBase, ITensor, inds, inputnames, mulopadd!, names, outputnames,
-    rename, state, unnamed
-using ITensorNetworksNext: ITensorNetworksNext, AbstractBilinearFormNetwork,
-    BlockedMessageUpdate, NormGramian, QuadraticFormGramian, braname, check_element_types,
-    default_nblocks, incoming_messages, kettensor, operatortensor, prod_tensors!,
-    updated_message
+using ITensorBase: ITensor, mulopadd!, names, unnamed
+using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, default_nblocks
 using TensorAlgebra: TensorOperationsContract
 using TensorOperations: TensorOperations as TO
 
@@ -35,47 +30,6 @@ function ITensorNetworksNext.default_nblocks(
         ::TO.cuTENSORBackend, ketbytes::Integer, χ::Integer
     )
     return max(clamp(fld(ketbytes, 4 * 2^20), 1, 16), cld(χ, 64))
-end
-
-# The ket and the tensors each block contracts into its slice in turn, checked before any
-# contraction runs.
-function message_contraction_tensors(algorithm, factor::NormGramian, messages)
-    rest = map(state, collect(messages))
-    return checked_tensors(algorithm, kettensor(factor), rest)
-end
-# The operator is one more step of the block contraction, so it may carry only its paired site
-# indices: a link index to a neighbouring operator would be a third leg on the message.
-function message_contraction_tensors(algorithm, factor::QuadraticFormGramian, messages)
-    op = factor.operator
-
-    linkinds = setdiff(names(op), [inputnames(op); outputnames(op)])
-
-    if !isempty(linkinds)
-        throw(
-            ArgumentError(
-                "`BlockedMessageUpdate` needs a product operator, but the operator has " *
-                    "indices $linkinds besides its inputs and outputs."
-            )
-        )
-    end
-
-    rest = [operatortensor(factor); map(state, collect(messages))]
-
-    return checked_tensors(algorithm, kettensor(factor), rest)
-end
-
-# Non-dense storage cannot be sliced by column.
-function checked_tensors(algorithm, ket, rest)
-    tensors = [ket; rest]
-    for t in tensors
-        unnamed(t) isa DenseArray || throw(
-            ArgumentError(
-                "`BlockedMessageUpdate` requires dense storage, got $(typeof(unnamed(t)))."
-            )
-        )
-    end
-    check_element_types(algorithm.contract_alg, tensors)
-    return ket, rest
 end
 
 # cuTENSOR throws `KeyError` when a contraction mixes element types, so that is rejected here
@@ -117,38 +71,6 @@ function ITensorNetworksNext.prod_tensors!(
     length(xs) > 1 && TO.tensorfree!(unnamed(x), allocator)
     TO.allocator_reset!(allocator, checkpoint)
     return y
-end
-
-function ITensorNetworksNext.updated_message(
-        algorithm::BlockedMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
-    )
-    factor = factors[src(edge)]
-    messages = incoming_messages(cache, edge)
-
-    ket, rest = message_contraction_tensors(algorithm, factor, messages)
-
-    # Shares the ket's data; the closing contraction conjugates it through its `conj` op.
-    bra = rename(n -> braname(factor, n), ket)
-    # The far vertex of `edge` may not be in `factors`, so the leg is found on the message.
-    ketdimname = only(intersect(names(cache[edge]), names(ket)))
-
-    χ = size(ket, ITensorBase.dim(ket, ketdimname))
-
-    nblocks = min(default_nblocks(algorithm, unnamed(ket), χ), χ)
-
-    # The message being replaced has the output's indices, bra copy then ket leg.
-    T = promote_type(eltype(ket), map(eltype, rest)...)
-    out = similar(ket, T, Tuple(inds(state(cache[edge]))))
-    conjlist = [falses(length(rest) + 1); true]
-
-    for block in 1:nblocks
-        cols = (fld((block - 1) * χ, nblocks) + 1):fld(block * χ, nblocks)
-        prod_tensors!(
-            algorithm.contract_alg, view(out, ketdimname => cols),
-            view(ket, ketdimname => cols), rest..., bra; conjlist
-        )
-    end
-    return out
 end
 
 end
