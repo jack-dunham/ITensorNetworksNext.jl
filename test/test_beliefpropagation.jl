@@ -9,12 +9,13 @@ using ITensorBase:
 using ITensorNetworksNext: ITensorNetworksNext, Exact, ITensorNetwork, MessageCache,
     NormNetwork, QuadraticFormNetwork, SimpleMessageUpdate, StopWhenConverged,
     beliefpropagation, bethe_free_energy, bethe_free_entropy, bratensor, contract_network,
-    contraction_order, edge_scalar, edge_scalars, incoming_messages, insertlink!, kettensor,
+    contraction_order, edge_scalar, edge_scalars, incident_subgraph, incoming_messages,
+    insertlink!, kettensor,
     linkaxes, linkinds, message_environment, messagecache, region_scalar, subgraph,
     tensornetwork, updated_message, vertex_scalar, vertex_scalars
 using LinearAlgebra: LinearAlgebra, norm, tr
-using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree, named_grid,
-    named_path_graph, vertextype
+using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree,
+    named_cycle_graph, named_grid, named_path_graph, vertextype
 using StableRNGs: StableRNG
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
 using TensorKitSectors: FermionParity
@@ -201,6 +202,29 @@ end
             @test subbpc isa MessageCache
             @test issetequal(vertices(subbpc), sub_vs)
             @test has_edge(subbpc, (1,) => (2,))
+        end
+
+        @testset "incident_subgraph" begin
+            g = named_grid((4,))
+            l = Dict(e => Index(2) for e in edges(g))
+            l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+
+            tn = tensornetwork(vertices(g)) do v
+                is = map(e -> l[e], incident_edges(g, v))
+                return randn(Tuple(is))
+            end
+            bpc = messagecache(edge -> ones(Tuple(linkinds(tn, edge))), all_edges(g))
+
+            subbpc = incident_subgraph(bpc, [(2,)])
+            @test subbpc isa MessageCache
+            @test issetequal(vertices(subbpc), [(1,), (2,), (3,)])
+            expected = NamedEdge.([(1,) => (2,), (2,) => (1,), (2,) => (3,), (3,) => (2,)])
+            @test issetequal(edges(subbpc), expected)
+            @test subbpc[(3,) => (2,)] == bpc[(3,) => (2,)]
+
+            cycle = incident_subgraph(named_cycle_graph(3), [1])
+            @test issetequal(vertices(cycle), [1, 2, 3])
+            @test ne(cycle) == 2
         end
         @testset "diff" begin
             g = named_grid((2,))
