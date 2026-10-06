@@ -14,7 +14,7 @@ using Random: AbstractRNG
 using StableRNGs: StableRNG
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
 using TensorKitSectors: FermionParity
-using Test: @test, @testset
+using Test: @test, @test_throws, @testset
 
 const spinone = Base.OneTo(3)
 const spinone_u1 = gradedrange([U1(2) => 1, U1(0) => 1, U1(-2) => 1])
@@ -107,6 +107,35 @@ end
         gated, _ = apply_operators([g1, g2], network, env)
         @test prod(gated) ≈ apply(g2, apply(g1, prod(network))) rtol =
             eps(real(T))^(1 / 3)
+    end
+
+    @testset "apply_operators with explicit vertices" begin
+        rng = StableRNG(123)
+        g = named_cycle_graph(N)
+        site_axes = Dict(v => Index(site_range) for v in vertices(g))
+        network, env = random_state(rng, T, g, site_axes; nlayers = 2, trunc = truncrank(4))
+        rtol = eps(real(T))^(1 / 3)
+
+        gates = [
+            randn_operator(rng, T, (site_axes[2], site_axes[3])),
+            randn_operator(rng, T, (site_axes[3],)),
+            randn_operator(rng, T, (site_axes[3], site_axes[4])),
+        ]
+        gated, gated_env = apply_operators(gates, network, env)
+        explicit, explicit_env =
+            apply_operators(gates, network, env; vertices = [[2, 3], [3], [3, 4]])
+        # The two runs mint different bond names, so compare name-independent quantities.
+        @test prod(explicit) ≈ prod(gated) rtol = rtol
+        for edge in edges(gated_env)
+            @test norm(explicit_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
+        end
+
+        @test_throws ArgumentError apply_operators(gates, network, env; vertices = [[2, 3]])
+        axis = Index(site_range)
+        offnetwork = randn_operator(rng, T, (axis,))
+        @test_throws ArgumentError(
+            "operator input `$(name(axis))` is not on any tensor of the network"
+        ) apply_operators([gates[1], offnetwork], network, env)
     end
 
     @testset "bp_gate_split names the new bond as requested" begin

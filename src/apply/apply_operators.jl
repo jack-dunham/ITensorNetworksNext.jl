@@ -48,7 +48,8 @@ end
 # === Top-level user entry point ===
 
 """
-    apply_operators(operators, state, env; alg=nothing, kwargs...) -> (state, env)
+    apply_operators(operators, state, env; alg=nothing, vertices=nothing, kwargs...)
+        -> (state, env)
 
 Apply each operator in `operators` (a sequence of single-tensor or two-tensor
 operators) to `state` in turn, updating `env` to reflect each application.
@@ -60,13 +61,19 @@ the operators applied. `kwargs` are forwarded to the per-operator algorithm
 (forwarded to the SVD that splits a two-site gate back into single-site
 tensors) and `normalize`.
 
+`vertices` holds one vertex list per operator, the vertices of `state` that operator acts
+on. By default each list is the operator's [`operator_support`](@ref) in `state`, and an
+`ArgumentError` is thrown if an input name of an operator is on no tensor of `state`.
+
 See also [`apply_operator`](@ref).
 """
-function apply_operators(operators, state, env; alg = nothing, kwargs...)
+function apply_operators(
+        operators, state, env; alg = nothing, vertices = nothing, kwargs...
+    )
     algorithm = select_algorithm(
         apply_operators, alg, (operators, state, env); kwargs...
     )
-    return apply_operators(algorithm, operators, state, env)
+    return apply_operators(algorithm, operators, state, env; vertices)
 end
 
 # The `apply_operators` iteration algorithm wraps the per-operator algorithm,
@@ -95,16 +102,35 @@ function default_algorithm(
     )
 end
 
-function apply_operators(algorithm, operators, state, env)
+function apply_operators(algorithm, operators, state, env; vertices = nothing)
     isempty(operators) && return copy(state), copy(env)
-    problem = ApplyOperatorsProblem(; operators, init = state)
+    if isnothing(vertices)
+        vertices = map(operators) do op
+            for name in inputnames(op)
+                has_dimname(state, name) || throw(
+                    ArgumentError(
+                        "operator input `$name` is not on any tensor of the network"
+                    )
+                )
+            end
+            return operator_support(state, op)
+        end
+    elseif length(vertices) != length(operators)
+        throw(
+            ArgumentError(
+                "got $(length(vertices)) vertex lists for $(length(operators)) operators"
+            )
+        )
+    end
+    problem = ApplyOperatorsProblem(; operators, vertices, init = state)
     return AI.solve(problem, algorithm; iterate = state, env)
 end
 
 # === Layer 1: apply_operators iteration ===
 
-@kwdef struct ApplyOperatorsProblem{Ops, Init} <: AI.Problem
+@kwdef struct ApplyOperatorsProblem{Ops, Vertices, Init} <: AI.Problem
     operators::Ops
+    vertices::Vertices
     init::Init
 end
 
@@ -154,7 +180,7 @@ function AI.step!(
     )
     state.iterate, state.env = apply_operator(
         algorithm.operator_algorithm, problem.operators[state.iteration], state.iterate,
-        state.env
+        state.env; vertices = problem.vertices[state.iteration]
     )
     return state
 end
@@ -297,7 +323,7 @@ end
 
 Stopping criterion for [`BeliefPropagationEnvironmentPreparation`](@ref), met when the next
 operator acts on two vertices and one of them was updated since belief propagation last
-ran. Vertices come from [`operator_vertices`](@ref).
+ran. The vertices of each operator are read from the problem's `vertices`.
 """
 struct StopWhenVertexRevisited <: AI.StoppingCriterion end
 
@@ -324,9 +350,7 @@ function AI.is_finished(
         state::BeliefPropagationEnvironmentPreparationState, ::StopWhenVertexRevisited,
         st::StopWhenVertexRevisitedState
     )
-    vertices = operator_vertices(
-        algorithm.operator_algorithm, state.iterate, problem.operators[state.operator_index]
-    )
+    vertices = problem.vertices[state.operator_index]
     return length(vertices) == 2 && any(in(st.updated), vertices)
 end
 
@@ -338,10 +362,7 @@ function AI.is_finished!(
         st::StopWhenVertexRevisitedState
     )
     if state.iteration > 0
-        previous = problem.operators[state.operator_index - 1]
-        previous_vertices =
-            operator_vertices(algorithm.operator_algorithm, state.iterate, previous)
-        union!(st.updated, previous_vertices)
+        union!(st.updated, problem.vertices[state.operator_index - 1])
     end
     return AI.is_finished(problem, algorithm, state, c, st)
 end
@@ -352,16 +373,6 @@ AI.get_reason(::StopWhenVertexRevisited, ::StopWhenVertexRevisitedState) = nothi
 # === Layer 3: single-operator strategy ===
 
 abstract type ApplyOperatorAlgorithm <: AbstractAlgorithm end
-
-"""
-    operator_vertices(operator_algorithm, network, operator)
-
-The vertices of `network` that `operator` acts on under `operator_algorithm`; by default
-[`operator_support`](@ref).
-"""
-function operator_vertices(operator_algorithm, network, operator)
-    return operator_support(network, operator)
-end
 
 """
     apply_operator(operator, state, env; alg=nothing, kwargs...) -> (state, env)
@@ -381,9 +392,9 @@ function apply_operator(operator, state, env; alg = nothing, kwargs...)
     return apply_operator(algorithm, operator, state, env)
 end
 
-function apply_operator(algorithm::ApplyOperatorAlgorithm, operator, state, env)
+function apply_operator(algorithm::ApplyOperatorAlgorithm, operator, state, env; kwargs...)
     dest, env_dest = initialize_output(apply_operator!, algorithm, operator, state, env)
-    apply_operator!(algorithm, dest, operator, state, env_dest)
+    apply_operator!(algorithm, dest, operator, state, env_dest; kwargs...)
     return dest, env_dest
 end
 
@@ -395,12 +406,11 @@ end
 end
 
 function apply_operator!(
-        algorithm::BPApplyGate, dest, operator, state, env
+        algorithm::BPApplyGate, dest, operator, state, env;
+        vertices = operator_support(state, operator)
     )
     apply_gate_bp!(
-        dest, operator, state, env;
-        vertices = operator_vertices(algorithm, state, operator),
-        algorithm.trunc, algorithm.normalize
+        dest, operator, state, env; vertices, algorithm.trunc, algorithm.normalize
     )
     return dest
 end
