@@ -2,14 +2,14 @@ using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, NamedTensor, align, inds, name, unnamed
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: CornerTransferProduct, DenseEig, ITensorNetwork,
-    SubspaceIteration, beliefpropagation, bethe_free_entropy, bond, contract_network,
-    ctm_environment, ctmrg, expect, face_update!, hexagonal_position, invariant_subspace,
-    leftface, linkinds, nextedge, normnetwork, planar_embedding, prevedge, tensornetwork,
+    beliefpropagation, bethe_free_entropy, contract_network, ctm_environment, ctmrg,
+    envinds, expect, face_update!, hexagonal_position, invariant_subspace, leftface,
+    linkinds, nextedge, normnetwork, planar_embedding, prevedge, tensornetwork,
     vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
-using Random: Xoshiro
 using StableRNGs: StableRNG
+using TensorAlgebra: matricize, unmatricize
 using Test: @test, @test_throws, @testset
 
 function ising_setup(g, β; h = 0.1, sz_vertices = [])
@@ -19,6 +19,24 @@ function ising_setup(g, β; h = 0.1, sz_vertices = [])
 end
 
 bp_messages(tn, g) = Dict(e => ones(Tuple(linkinds(tn, e))) for e in all_edges(g))
+
+# `matrices` as a `CornerTransferProduct` of named tensors, whose cut is the first's rows.
+function named_product(matrices)
+    links = [Index(size(matrix, 1)) for matrix in matrices]
+    tensors = map(enumerate(matrices)) do (i, matrix)
+        return unmatricize(matrix, (links[i],), (links[mod1(i + 1, end)],))
+    end
+    return CornerTransferProduct(tensors)
+end
+
+# `invariant_subspace` on a `CornerTransferProduct`, with the bases as matrices over its cut.
+function matrix_subspace(alg, product, maxdim)
+    right_basis, left_basis, eigenvalues = invariant_subspace(alg, product, maxdim)
+    k = last(inds(right_basis))
+    return matricize(right_basis, product.cut, (k,)),
+        matricize(left_basis, (k,), product.cut),
+        eigenvalues
+end
 
 const LATTICES = (
     ("grid", named_grid((4, 4)), v -> v),
@@ -45,10 +63,9 @@ const LATTICES = (
         B = [3.0 0 0 0; 0 1 -1 0; 0 1 1 0; 0 0 0 0.5]
         S = [1.0 2 0 1; 0 1 3 0; 1 0 1 2; 0 1 0 1]
         Λ = S * B / S
-        for alg in (DenseEig(), SubspaceIteration()),
-                (maxdim, χ) in ((1, 1), (2, 1), (3, 3), (4, 4))
-
-            VR, VL, λ = invariant_subspace(alg, Λ, maxdim)
+        product = named_product([S, B, inv(S)])
+        for (maxdim, χ) in ((1, 1), (2, 1), (3, 3), (4, 4))
+            VR, VL, λ = matrix_subspace(DenseEig(), product, maxdim)
             @test length(λ) == χ
             @test Λ * VR ≈ VR * Diagonal(λ)
             @test VL * Λ ≈ Diagonal(λ) * VL
@@ -56,15 +73,6 @@ const LATTICES = (
         end
         _, _, λ = invariant_subspace(DenseEig(), Diagonal([1.0, 5.0e-11, 0.0]), 3)
         @test length(λ) == 2
-    end
-
-    @testset "`SubspaceIteration` on a `CornerTransferProduct` matches `DenseEig`" begin
-        A, B = randn(Xoshiro(3), 40, 40), randn(Xoshiro(4), 40, 40)
-        product = CornerTransferProduct([A, B, transpose(A)])
-        VR, VL, λ = invariant_subspace(DenseEig(), product, 5)
-        VR′, VL′, λ′ = invariant_subspace(SubspaceIteration(), product, 5)
-        @test length(λ′) == length(λ)
-        @test VR′ * VL′ ≈ VR * VL rtol = 1.0e-10
     end
 
     function run_sweeps!(env, tn; maxdim, nsweeps)
@@ -134,18 +142,6 @@ const LATTICES = (
         env = ctmrg(tn, emb; maxdim = 1, stopping_criterion = sc)
         @test exp(bethe_free_entropy(tn, env)) ≈ exp(bethe_free_entropy(tn, cache)) rtol =
             1.0e-8
-    end
-
-    @testset "`SubspaceIteration` reaches the `DenseEig` fixed point" begin
-        g = named_grid((4, 4))
-        tn, _ = ising_setup(g, 0.4)
-        emb = planar_embedding(g, v -> v)
-        env = ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)
-        env′ = ctmrg(
-            tn, emb; maxdim = 2, stopping_criterion = sc,
-            subspace_algorithm = SubspaceIteration()
-        )
-        @test bethe_free_entropy(tn, env′) ≈ bethe_free_entropy(tn, env) rtol = 1.0e-12
     end
 
     @testset "Z_B and magnetisation converge to exact ($lattice)" for (lattice, g, pos) in
@@ -244,8 +240,8 @@ const LATTICES = (
         # Legs in a fixed order, since every update makes new bond indices.
         function edge_array(d)
             legs = (
-                linkinds(tn, d)..., bond(env, nextedge(emb, d)),
-                bond(env, prevedge(emb, reverse(d))),
+                linkinds(tn, d)..., envinds(env, nextedge(emb, d))...,
+                envinds(env, prevedge(emb, reverse(d)))...,
             )
             return unnamed(align(env.edgetensors[d], name.(legs)))
         end
