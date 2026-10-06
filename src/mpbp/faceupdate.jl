@@ -1,6 +1,6 @@
 using DiagonalArrays: diagview
 using Dictionaries: Dictionary, set!
-using Graphs: dst, src
+using Graphs: degree, dst, src
 using ITensorBase: ITensorBase, Index, commoninds, inds, name, names, state, unnamed
 using LinearAlgebra: inv, norm
 
@@ -16,11 +16,9 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
 
     transfer = contract_network([[tn[vertex]]; environment_tensors(env, vertex; exclude)])
 
-    for reversed in (reverse(incoming), reverse(outgoing)), index in envinds(env, reversed)
-        if name(index) ∉ names(transfer)
-            @assert length(index) == 1
-            transfer = transfer * ones(eltype(transfer), (index,))
-        end
+    # At a vertex of degree 2 nothing else carries the far face's bonds, so its corner supplies them.
+    if degree(env.embedding.graph, vertex) == 2
+        transfer = transfer * cornertensor(env, reverse(outgoing))
     end
 
     # A fixed leg order, the incoming cut then the outgoing one, lets `CornerTransferProduct` read
@@ -58,25 +56,25 @@ function diaginv(tensor)
 end
 
 """
-    face_solve(face, transfers; maxdim, alg, reference = nothing)
+    face_solve(transfers; maxdim, alg, reference = nothing)
         -> eigenvalues, right_basis, left_basis
 
-Solve the `NamedFace` `face` from its normalised corner transfer tensors `transfers` keyed
-by vertex. Reads no environment, so the transfer tensors can be computed by whichever ranks own
+Solve a face from its normalised corner transfer tensors `transfers`, keyed by vertex in the
+face's order. Reads no environment, so the transfer tensors can be computed by whichever ranks own
 the vertices. `eigenvalues` are the kept eigenvalues of the product of the face's transfer
 tensors, from which `set_face_corners!` builds the corners; `right_basis` and `left_basis`
 span the invariant subspace, `face_projectors` builds the projectors from them, and a later
 solve takes the pair as `reference`.
 """
 function face_solve(
-        face, transfers; maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
+        transfers; maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
     )
     product = CornerTransferProduct(collect(transfers))
     right_basis, left_basis, eigenvalues =
         invariant_subspace(alg, product, maxdim; reference)
     # Ill-conditioned eigenvalues or bases make the edge tensors written from them inaccurate.
     @debug(
-        "face_solve", face, bond_dim = length(eigenvalues),
+        "face_solve", bond_dim = length(eigenvalues),
         eigenvalue_condition = maximum(abs, eigenvalues) / minimum(abs, eigenvalues),
         projector_condition = norm(left_basis) * norm(right_basis),
     )
@@ -171,7 +169,7 @@ function face_update!(
     transfers = transfer_tensors(tn, env, face)
 
     eigenvalues, right_basis, left_basis = face_solve(
-        face, transfers; maxdim, alg, reference = get(env.bases, face, nothing)
+        transfers; maxdim, alg, reference = get(env.bases, face, nothing)
     )
 
     set_face_corners!(env, face, eigenvalues)
@@ -183,10 +181,7 @@ function face_update!(
     )
 
     for edge in face
-        right_projector = right_projectors[reverse(edge)]
-        left_projector = left_projectors[edge]
-
-        set_face_edge!(env, edge, right_projector, left_projector)
+        set_face_edge!(env, edge, right_projectors[reverse(edge)], left_projectors[edge])
     end
 
     return env

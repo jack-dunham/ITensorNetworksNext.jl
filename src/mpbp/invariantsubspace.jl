@@ -103,28 +103,21 @@ function transformed(right::AbstractNamedTensor, left::AbstractNamedTensor, tran
         unmatricize(inv(transform), (new,), (old,)) * left
 end
 
-function permuted(right::AbstractMatrix, left::AbstractMatrix, order)
-    return right[:, order], left[order, :]
-end
-function permuted(right, left, order)
-    permutation = Matrix{Float64}(I, length(order), length(order))[:, order]
-    return transformed(right, left, permutation)
-end
-
 # Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
 # bases onto `previous` within blocks of equal eigenvalues, which leaves the corners diagonal.
 function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_rtol)
     size(previous) == size(right_basis) || return right_basis, left_basis, eigenvalues
-    overlaps = abs.(overlap_matrix(left_basis, previous))
+    overlaps = overlap_matrix(left_basis, previous)
     order = Int[]
     for column in axes(overlaps, 2)
         candidates = setdiff(axes(overlaps, 1), order)
-        push!(order, candidates[argmax(overlaps[candidates, column])])
+        push!(order, candidates[argmax(abs.(overlaps[candidates, column]))])
     end
-    right_basis, left_basis = permuted(right_basis, left_basis, order)
     eigenvalues = eigenvalues[order]
+    permutation = Matrix{Float64}(I, length(order), length(order))[:, order]
 
-    rotation = overlap_matrix(left_basis, previous)
+    # The overlap of the permuted bases with `previous`.
+    rotation = overlaps[order, :]
     for i in axes(rotation, 1), j in axes(rotation, 2)
         degenerate =
             i == j ||
@@ -132,8 +125,8 @@ function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_
         degenerate || (rotation[i, j] = 0)
     end
     # A near-singular rotation means the subspace has moved; aligning onto it would amplify noise.
-    cond(rotation) < 1.0e8 || return right_basis, left_basis, eigenvalues
-    return transformed(right_basis, left_basis, rotation)..., eigenvalues
+    transform = cond(rotation) < 1.0e8 ? permutation * rotation : permutation
+    return transformed(right_basis, left_basis, transform)..., eigenvalues
 end
 
 """
