@@ -252,7 +252,7 @@ function apply_operator_environment_preparation(
             problem, algorithm, environment_state, when,
             environment_state.stopping_criterion_state
         )
-        state.env = environment_beliefpropagation(
+        state.env = update_environment(
             environment_algorithm, problem, algorithm, state
         )
         environment_state.iteration = 0
@@ -265,13 +265,13 @@ function apply_operator_environment_preparation(
 end
 
 """
-    environment_beliefpropagation(environment_algorithm, problem, algorithm, state) -> env
+    update_environment(environment_algorithm, problem, algorithm, state) -> env
 
-The environment after running belief propagation on `state.env` with the norm network of
-`state.iterate`, called by [`BeliefPropagationEnvironmentPreparation`](@ref) when its
-criterion is met.
+`state.env` brought up to date before the next operator, called when the criterion of
+`environment_algorithm` is met. For [`BeliefPropagationEnvironmentPreparation`](@ref), runs
+belief propagation on the norm network of `state.iterate`.
 """
-function environment_beliefpropagation(
+function update_environment(
         environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
         state
     )
