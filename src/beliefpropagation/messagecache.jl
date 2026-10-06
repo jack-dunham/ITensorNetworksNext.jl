@@ -5,7 +5,8 @@ using Dictionaries: Dictionary, getindices, set!, unset!
 using Graphs: AbstractGraph, connected_components, edges, is_directed, is_tree
 using ITensorBase: inputnames, outputnames, state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
-    boundary_edges, in_incident_edges, to_graph_index, vertextype
+    boundary_edges, edge_subgraph, in_incident_edges, incident_edges, to_graph_index,
+    vertextype
 using SplitApplyCombine: mapmany
 
 struct MessageCache{T, V} <: AbstractEdgeDataGraph{T, V}
@@ -128,6 +129,17 @@ end
 function incoming_edge_data(cache::AbstractGraph, vertices)
     in_edges = Indices(boundary_edges(cache, vertices; dir = :in))
     return getindices(cache, in_edges)
+end
+
+"""
+    incident_subgraph(graph, vertices)
+
+The subgraph of `graph` spanned by the edges with an endpoint in `vertices`. Unlike
+`subgraph`, it includes the neighbours of `vertices`, but no edge between two neighbours.
+"""
+function incident_subgraph(graph::AbstractGraph, vertices)
+    edges = mapreduce(v -> incident_edges(graph, v; dir = :both), union, vertices)
+    return edge_subgraph(graph, edges)
 end
 
 function vertex_scalar(factors, messages, vertex; kwargs...)
