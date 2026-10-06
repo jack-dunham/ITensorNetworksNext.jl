@@ -1,6 +1,6 @@
 using DataGraphs: DataGraphs, get_vertex_data, is_vertex_assigned
 using Dictionaries: Dictionaries, Dictionary, isinsertable, issettable
-using Graphs: Graphs, edges, vertices
+using Graphs: Graphs, AbstractEdge, edges, src, vertices
 using ITensorBase: ITensorBase, conj, inds, name, rename
 using NamedGraphs: NamedGraphs, decoded_vertex, encoded_graph, encoded_vertex
 
@@ -192,3 +192,15 @@ NamedGraphs.encoded_graph(nnv::BraView) = encoded_graph(parent(nnv))
 
 Dictionaries.issettable(nnv::BraView) = issettable(parent(nnv))
 Dictionaries.isinsertable(nnv::BraView) = isinsertable(parent(nnv))
+
+# ================================ ITensorNetworksNext.jl ================================ #
+
+function linknames(nnv::BraView, edge::AbstractEdge)
+    bn = parent(nnv)
+    return map(n -> braname(bn, n), linknames(ketnetwork(bn), edge))
+end
+function linkinds(nnv::BraView, edge::AbstractEdge)
+    ln = linknames(nnv, edge)
+    return [i for i in brainds(parent(nnv)[src(edge)]) if name(i) in ln]
+end
+linkaxes(nnv::BraView, edge::AbstractEdge) = linkinds(nnv, edge)
