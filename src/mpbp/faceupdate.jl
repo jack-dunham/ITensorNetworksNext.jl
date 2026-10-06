@@ -1,10 +1,12 @@
+using DiagonalArrays: diagview
 using Dictionaries: Dictionary, set!
 using Graphs: dst, src
-using ITensorBase: ITensorBase, Index, commoninds, inds, name, names, state
-using LinearAlgebra: Diagonal, inv, norm, opnorm
-using TensorAlgebra: unmatricize
+using ITensorBase: ITensorBase, Index, commoninds, inds, name, names, state, unnamed
+using LinearAlgebra: inv, norm
 
-cut_inds(tn, env::CTMEnvironment, edge) = (linkinds(tn, edge)..., bond(env, reverse(edge)))
+function cutinds(tn, env::CTMEnvironment, edge)
+    return (linkinds(tn, edge)..., envinds(env, reverse(edge))...)
+end
 
 # Transfer matrix at `src(outgoing)` from the face edge before `outgoing` to `outgoing`.
 function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
@@ -14,88 +16,45 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
 
     transfer = contract_network([[tn[vertex]]; environment_tensors(env, vertex; exclude)])
 
-    for reversed in (reverse(incoming), reverse(outgoing))
-        bond_index = bond(env, reversed)
-        if name(bond_index) ∉ names(transfer)
-            @assert length(bond_index) == 1
-            transfer = transfer * ones(eltype(transfer), (bond_index,))
+    for reversed in (reverse(incoming), reverse(outgoing)), index in envinds(env, reversed)
+        if name(index) ∉ names(transfer)
+            @assert length(index) == 1
+            transfer = transfer * ones(eltype(transfer), (index,))
         end
     end
 
-    # A fixed leg order, the incoming cut then the outgoing one, lets `face_cut` read the cut off
-    # the legs in an order that does not depend on how the contraction laid them out.
-    legs = name.((cut_inds(tn, env, incoming)..., cut_inds(tn, env, outgoing)...))
+    # A fixed leg order, the incoming cut then the outgoing one, lets `CornerTransferProduct` read
+    # the cut off the legs in an order that does not depend on how the contraction laid them out.
+    legs = name.((cutinds(tn, env, incoming)..., cutinds(tn, env, outgoing)...))
     @assert issetequal(names(transfer), legs)
     return ITensorBase.align(state(transfer), legs)
 end
 
-# Normalised transfer tensor at each edge of `face`.
+# Normalised transfer tensor at each vertex of `face`, keyed by the vertex.
 function transfer_tensors(tn, env::CTMEnvironment, face::NamedFace)
     transfers = map(face) do edge
         # `state` drops the operator pairing a `NormNetwork` vertex tensor carries.
         transfer = state(corner_transfer_matrix(tn, env, edge))
         return transfer / norm(transfer)
     end
-    return Dictionary(face, transfers)
+    return Dictionary(src.(face), transfers)
 end
 
-# Right projector at each edge of `face`, carried backwards from `right_basis` at the last
-# edge and divided by a corner at each step; it has the bond of the face edge before it.
-# The cut at `face`'s last edge: the indices its last and first transfer tensors share, in the
-# order of the last one's legs, which `corner_transfer_matrix` fixes.
-face_cut(face, transfers) = Tuple(commoninds(transfers[last(face)], transfers[first(face)]))
-
-function right_blocks(env::CTMEnvironment, face, transfers, right_basis)
-    embedding = env.embedding
-    last_edge = last(face)
-    blocks = Dictionary(
-        [last_edge],
-        [
-            unmatricize(
-                right_basis, face_cut(face, transfers),
-                (bond(env, prevedge(embedding, last_edge)),)
-            ),
-        ]
-    )
-    for edge in reverse(face[2:end])
-        previous = prevedge(embedding, edge)
-        block = transfers[edge] * blocks[edge]
-        set!(
-            blocks,
-            previous,
-            block * inverse(cornertensor(env, prevedge(embedding, previous)))
-        )
-    end
-    return blocks
-end
-
-# Left projector at each edge of `face`, carried forwards from `left_basis` at the last edge
-# and divided by a corner at each step; it has the bond of the face edge after it.
-function left_blocks(env::CTMEnvironment, face, transfers, left_basis)
-    embedding = env.embedding
-    last_edge = last(face)
-    blocks = Dictionary(
-        [last_edge],
-        [
-            unmatricize(
-                transpose(left_basis),
-                face_cut(face, transfers),
-                (bond(env, nextedge(embedding, last_edge)),)
-            ),
-        ]
-    )
-    for edge in face[1:(end - 1)]
-        block = blocks[prevedge(embedding, edge)] * transfers[edge]
-        set!(blocks, edge, inverse(cornertensor(env, edge)) * block)
+# Carries `block` from `start` along `edges`, each directed the way the walk travels, through the
+# transfer tensor where it enters each edge and the inverse of the corner where it leaves.
+function carried_blocks(start, edges, transfers, corners, block)
+    blocks = Dictionary([start], [block])
+    for edge in edges
+        block = transfers[src(edge)] * block * diaginv(corners[dst(edge)])
+        set!(blocks, edge, block)
     end
     return blocks
 end
 
 # Inverse of a diagonal two-index `tensor`, such as a corner, as a map between its indices.
-function inverse(tensor)
+function diaginv(tensor)
     row, column = inds(tensor)
-    diagonal = [tensor[row => k, column => k] for k in 1:length(row)]
-    return diagonal_tensor(inv.(diagonal), row, column)
+    return diagonal_tensor(inv.(diagview(unnamed(tensor))), row, column)
 end
 
 """
@@ -103,7 +62,7 @@ end
         -> eigenvalues, right_basis, left_basis
 
 Solve the `NamedFace` `face` from its normalised corner transfer tensors `transfers` keyed
-by edge. Reads no environment, so the transfer tensors can be computed by whichever ranks own
+by vertex. Reads no environment, so the transfer tensors can be computed by whichever ranks own
 the vertices. `eigenvalues` are the kept eigenvalues of the product of the face's transfer
 tensors, from which `set_face_corners!` builds the corners; `right_basis` and `left_basis`
 span the invariant subspace, `face_projectors` builds the projectors from them, and a later
@@ -112,14 +71,14 @@ solve takes the pair as `reference`.
 function face_solve(
         face, transfers; maxdim::Integer, alg::AbstractAlgorithm, reference = nothing
     )
-    product = CornerTransferProduct(collect(transfers), face_cut(face, transfers))
+    product = CornerTransferProduct(collect(transfers))
     right_basis, left_basis, eigenvalues =
         invariant_subspace(alg, product, maxdim; reference)
     # Ill-conditioned eigenvalues or bases make the edge tensors written from them inaccurate.
     @debug(
         "face_solve", face, bond_dim = length(eigenvalues),
         eigenvalue_condition = maximum(abs, eigenvalues) / minimum(abs, eigenvalues),
-        projector_condition = opnorm(left_basis) * opnorm(right_basis),
+        projector_condition = norm(left_basis) * norm(right_basis),
     )
     return eigenvalues, right_basis, left_basis
 end
@@ -136,7 +95,7 @@ function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
         complex.(eigenvalues) .^ (1 / m)
     end
     new_bonds = map(Dictionary(face, face)) do edge
-        old_bond = bond(env, edge)
+        old_bond = only(envinds(env, edge))
         return length(old_bond) == length(roots) ? old_bond : Index(length(roots))
     end
     for edge in face
@@ -156,17 +115,32 @@ end
         -> right_projectors, left_projectors
 
 The right and left projectors at each edge of `face`, built from its bases by carrying them
-around the face through `transfers`. The face's new corners must already be in `env`.
+around the face through `transfers`. The face's new corners must already be in `env`. Left
+projectors are keyed by the face's edges and right projectors by those edges reversed. Each
+projector's legs are the cut at its edge, in the order `corner_transfer_matrix` fixes, then its
+bond.
 """
 function face_projectors(env::CTMEnvironment, face, transfers, right_basis, left_basis)
     # Every corner of the face is `D = Λ^(1/m)`; the bases are rescaled by `Λ / D` and `1 / D`
     # so that each pass divides by one corner per step.
     roots = corner_diagonal(env, first(face))
-    m = length(face)
-    right_projectors =
-        right_blocks(env, face, transfers, right_basis * Diagonal(roots .^ (m - 1)))
-    left_projectors =
-        left_blocks(env, face, transfers, Diagonal(inv.(roots)) * left_basis)
+
+    corners = Dictionary(dst.(face), [cornertensor(env, edge) for edge in face])
+
+    start, others = last(face), face[1:(end - 1)]
+
+    # The scaling also takes the bases' shared index `k` to the bond of the first step's edge.
+    k = last(inds(right_basis))
+    right_bond, left_bond =
+        only(envinds(env, last(others))), only(envinds(env, first(others)))
+    right_block = right_basis * diagonal_tensor(roots .^ (length(face) - 1), k, right_bond)
+    left_block = left_basis * diagonal_tensor(inv.(roots), k, left_bond)
+
+    right_projectors = carried_blocks(
+        reverse(start), reverse.(reverse(others)), transfers, corners, right_block
+    )
+    left_projectors = carried_blocks(start, others, transfers, corners, left_block)
+
     return right_projectors, left_projectors
 end
 
@@ -175,8 +149,8 @@ end
 function set_face_edge!(env::CTMEnvironment, edge, right_projector, left_projector)
     reversed = reverse(edge)
     previous = prevedge(env.embedding, reversed)
-    env.edgetensors[reversed] = right_projector * inverse(cornertensor(env, reversed))
-    env.edgetensors[edge] = left_projector * inverse(cornertensor(env, previous))
+    env.edgetensors[reversed] = right_projector * diaginv(cornertensor(env, reversed))
+    env.edgetensors[edge] = left_projector * diaginv(cornertensor(env, previous))
     return env
 end
 
@@ -209,7 +183,7 @@ function face_update!(
     )
 
     for edge in face
-        right_projector = right_projectors[edge]
+        right_projector = right_projectors[reverse(edge)]
         left_projector = left_projectors[edge]
 
         set_face_edge!(env, edge, right_projector, left_projector)
