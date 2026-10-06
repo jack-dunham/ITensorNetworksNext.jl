@@ -1,6 +1,7 @@
+using DiagonalArrays: diagview, setdiagindices!
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
-using ITensorBase: Index, commoninds
+using ITensorBase: AbstractNamedTensor, Index, commoninds, unnamed
 using NamedGraphs: NamedEdge, all_edges
 
 struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
@@ -8,32 +9,26 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
     edgetensors::E
     cornertensors::C
     # Each face's `(right_basis, left_basis)` from its last update, which the next one aligns
-    # onto and `SubspaceIteration` starts from.
-    bases::Dict{NamedFace{V}, Tuple{AbstractMatrix, AbstractMatrix}}
+    # onto.
+    bases::Dict{NamedFace{V}, Tuple{AbstractNamedTensor, AbstractNamedTensor}}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
-# `c[edge]` and the corner before it in the same face share exactly the bond of `edge`.
-function bond(env::CTMEnvironment, edge)
+# The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
+function envinds(env::CTMEnvironment, edge)
     previous = prevedge(env.embedding, edge)
-    return only(commoninds(cornertensor(env, edge), cornertensor(env, previous)))
+    return Tuple(commoninds(cornertensor(env, edge), cornertensor(env, previous)))
 end
 
 # Two-index tensor over `row` and `column` with `diagonal` on its diagonal; every corner is one.
 function diagonal_tensor(diagonal, row, column)
     tensor = zeros(eltype(diagonal), (row, column))
-    for (k, value) in enumerate(diagonal)
-        tensor[row => k, column => k] = value
-    end
+    setdiagindices!(unnamed(tensor), diagonal, :)
     return tensor
 end
 
-function corner_diagonal(env::CTMEnvironment, edge)
-    row, column = bond(env, edge), bond(env, nextedge(env.embedding, edge))
-    tensor = cornertensor(env, edge)
-    return [tensor[row => k, column => k] for k in 1:length(row)]
-end
+corner_diagonal(env::CTMEnvironment, edge) = diagview(unnamed(cornertensor(env, edge)))
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
@@ -62,7 +57,7 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
 
     return CTMEnvironment(
         embedding, edgetensors, corners,
-        Dict{eltype(embedding.faces), Tuple{AbstractMatrix, AbstractMatrix}}()
+        Dict{eltype(embedding.faces), Tuple{AbstractNamedTensor, AbstractNamedTensor}}()
     )
 end
 
