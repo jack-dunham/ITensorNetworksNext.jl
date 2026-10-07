@@ -82,8 +82,8 @@ function face_solve(
 end
 
 # Writes each corner of `face` and each of its bonds, keeping a bond's index while its dimension
-# is unchanged.
-function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
+# is unchanged and otherwise naming it from `bondnames`, keyed by face edge, when given.
+function set_face_corners!(env::CTMEnvironment, face, eigenvalues; bondnames = nothing)
     # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
     # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
     m = length(face)
@@ -94,11 +94,8 @@ function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
     end
     new_bonds = map(Dictionary(face, face)) do edge
         old_bond = only(envinds(env, edge))
-        return if length(old_bond) == length(roots)
-            old_bond
-        else
-            next_bond(old_bond, length(roots))
-        end
+        length(old_bond) == length(roots) && return old_bond
+        return bond_index(length(roots), isnothing(bondnames) ? nothing : bondnames[edge])
     end
     for edge in face
         row, column = new_bonds[edge], new_bonds[nextedge(env.embedding, edge)]
@@ -170,18 +167,20 @@ function set_left_edge!(env::CTMEnvironment, edge, left_projector)
 end
 
 """
-    face_update!(env, tn, face; maxdim, alg) -> env
+    face_update!(env, tn, face; maxdim, alg, bondnames = nothing) -> env
 
 Replace the corners, bonds and edge tensors of the `NamedFace` `face` with the MP-BP solution
 of the face given the rest of `env`. The new subspace basis is aligned onto the one from the
-face's previous update, so the edge tensors converge entry by entry.
+face's previous update, so the edge tensors converge entry by entry. `bondnames`, keyed by face
+edge, names the bonds whose dimension changes; by default their names are new.
 """
 function face_update!(
         env::CTMEnvironment,
         tn,
         face::NamedFace;
         maxdim::Integer,
-        alg::AbstractAlgorithm
+        alg::AbstractAlgorithm,
+        bondnames = nothing
     )
     transfers = transfer_tensors(tn, env, face)
 
@@ -189,7 +188,7 @@ function face_update!(
         transfers; maxdim, alg, reference = get(env.bases, face, nothing)
     )
 
-    set_face_corners!(env, face, eigenvalues)
+    set_face_corners!(env, face, eigenvalues; bondnames)
     set_face_bases!(env, face, right_basis, left_basis)
 
     right_projectors, left_projectors = face_projectors(

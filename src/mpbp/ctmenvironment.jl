@@ -1,9 +1,8 @@
 using DiagonalArrays: diagview, setdiagindices!
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
-using ITensorBase: AbstractNamedTensor, Index, IndexName, name, setname, unnamed
+using ITensorBase: AbstractNamedTensor, Index, setname, unnamed
 using NamedGraphs: NamedEdge, all_edges
-using UUIDs: UUID, uuid5
 
 struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache, I}
     embedding::PlanarEmbedding{V}
@@ -18,12 +17,9 @@ cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
 envinds(env::CTMEnvironment, edge) = env.envinds[NamedEdge(edge)]
 
-# Bond names are hashed from the edge or from the bond they replace, so that every process
-# building the same environment gives each bond the same name.
-const BOND_NAMESPACE = UUID("4f231e03-f233-4684-80a2-63f028edc951")
-bond_index(id::UUID, n) = setname(Index(n), IndexName(; uuid = id))
-initial_bond(edge) = bond_index(uuid5(BOND_NAMESPACE, string(edge)), 1)
-next_bond(bond, n) = bond_index(uuid5(name(bond).uuid, "next"), n)
+# A bond of length `n`, named `name` unless it is `nothing`.
+bond_index(n, ::Nothing) = Index(n)
+bond_index(n, name) = setname(Index(n), name)
 
 # Two-index tensor over `row` and `column` with `diagonal` on its diagonal; every corner is one.
 function diagonal_tensor(diagonal, row, column)
@@ -42,14 +38,17 @@ function Base.copy(env::CTMEnvironment)
 end
 
 """
-    ctm_environment(tn, embedding, messages) -> CTMEnvironment
+    ctm_environment(tn, embedding, messages; bondnames = nothing) -> CTMEnvironment
 
 The χ = 1 environment whose edge tensors are the BP `messages` and whose corners are all 1.
+`bondnames` maps each directed edge to the name of its bond; by default the names are new.
 """
-function ctm_environment(tn, embedding::PlanarEmbedding, messages)
+function ctm_environment(tn, embedding::PlanarEmbedding, messages; bondnames = nothing)
     embedding_edges = collect(all_edges(embedding.graph))
-    envinds =
-        Dictionary(embedding_edges, [(initial_bond(edge),) for edge in embedding_edges])
+    bondname(edge) = isnothing(bondnames) ? nothing : bondnames[edge]
+    envinds = Dictionary(
+        embedding_edges, [(bond_index(1, bondname(edge)),) for edge in embedding_edges]
+    )
     elt = eltype(messages[first(embedding_edges)])
 
     edgetensors = messagecache(embedding_edges) do edge
