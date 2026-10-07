@@ -14,13 +14,13 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache, I}
     bases::Dict{NamedFace{V}, Tuple{AbstractNamedTensor, AbstractNamedTensor}}
     # The bond of each directed edge, which its corner shares with the corner before it. Kept
     # here so that a bond can be read without the corner at the edge's far end.
-    bonds::Dictionary{NamedEdge{V}, I}
+    envinds::Dictionary{NamedEdge{V}, I}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
-envinds(env::CTMEnvironment, edge) = (env.bonds[NamedEdge(edge)],)
+envinds(env::CTMEnvironment, edge) = (env.envinds[NamedEdge(edge)],)
 
 # Bond names are hashed from the edge or from the bond they replace, so that every process
 # building the same environment gives each bond the same name.
@@ -41,7 +41,7 @@ corner_diagonal(env::CTMEnvironment, edge) = diagview(unnamed(cornertensor(env, 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
         env.embedding, map(identity, env.edgetensors), map(identity, env.cornertensors),
-        copy(env.bases), copy(env.bonds)
+        copy(env.bases), copy(env.envinds)
     )
 end
 
@@ -52,21 +52,21 @@ The χ = 1 environment whose edge tensors are the BP `messages` and whose corner
 """
 function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     embedding_edges = collect(all_edges(embedding.graph))
-    bonds = Dictionary(embedding_edges, initial_bond.(embedding_edges))
+    envinds = Dictionary(embedding_edges, initial_bond.(embedding_edges))
     elt = eltype(messages[first(embedding_edges)])
 
     edgetensors = messagecache(embedding_edges) do edge
-        return messages[edge] * ones(elt, (bonds[nextedge(embedding, edge)],)) *
-            ones(elt, (bonds[prevedge(embedding, reverse(edge))],))
+        return messages[edge] * ones(elt, (envinds[nextedge(embedding, edge)],)) *
+            ones(elt, (envinds[prevedge(embedding, reverse(edge))],))
     end
     corners = messagecache(embedding_edges) do edge
-        return ones(elt, (bonds[edge], bonds[nextedge(embedding, edge)]))
+        return ones(elt, (envinds[edge], envinds[nextedge(embedding, edge)]))
     end
 
     return CTMEnvironment(
         embedding, edgetensors, corners,
         Dict{eltype(embedding.faces), Tuple{AbstractNamedTensor, AbstractNamedTensor}}(),
-        bonds
+        envinds
     )
 end
 
