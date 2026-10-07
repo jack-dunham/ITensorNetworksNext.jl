@@ -1,10 +1,9 @@
 module ITensorNetworksNextTensorOperationsExt
 
 using Graphs: src
-using ITensorBase: AbstractITensor, ITensor, inds, inputnames, mulopadd!, names, nametype,
-    outputnames, rename, uniquename, unnamed
+using ITensorBase: AbstractITensor, ITensor, inds, mulopadd!, names, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, BufferedBPGateUpdate,
-    default_nblocks
+    absorb_matrices!, default_nblocks
 using MatrixAlgebraKit: project_hermitian, qr_compact
 using NamedGraphs: boundary_edges
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
@@ -79,8 +78,6 @@ function ITensorNetworksNext.prod_tensors!(
     return y
 end
 
-# Each chain alternates between its input and one allocator scratch with the same names;
-# `mulopadd!` writes by name, so a destination needs no particular dimension order.
 function ITensorNetworksNext.bp_gate_factorize!(
         subalgorithm::BufferedBPGateUpdate{<:TensorOperationsContract}, op::AbstractITensor,
         state, env, v, w
@@ -91,38 +88,12 @@ function ITensorNetworksNext.bp_gate_factorize!(
             "`BufferedBPGateUpdate` requires dense storage, got $(typeof(unnamed(ψ)))."
         )
     )
-    alg = subalgorithm.contract_alg
     edges_in = [e for e in boundary_edges(env, [v]; dir = :in) if src(e) != w]
     roots = [sqrth_invsqrth_safe(project_hermitian(env[e])) for e in edges_in]
     sqrt_messages, invsqrt_messages = first.(roots), last.(roots)
-    current = ψ
-    if !isempty(sqrt_messages)
-        allocator = contract_allocator(alg)
-        checkpoint = TO.allocator_checkpoint!(allocator)
-        T = mapreduce(eltype, promote_type, sqrt_messages; init = eltype(ψ))
-        T === eltype(ψ) || throw(
-            ArgumentError(
-                "`BufferedBPGateUpdate` needs messages of eltype $(eltype(ψ)), got $T."
-            )
-        )
-        p = (ntuple(identity, ndims(unnamed(ψ))), ())
-        other = TO.tensoralloc_add(T, unnamed(ψ), p, false, Val(true), allocator)
-        other = ITensor(other, names(ψ))
-        for m in sqrt_messages
-            bond_in = map(_ -> uniquename(nametype(ψ)), inputnames(m))
-            current_in = rename(current, (inputnames(m) .=> bond_in)...)
-            m_in = rename(
-                m, (inputnames(m) .=> bond_in)..., (outputnames(m) .=> inputnames(m))...
-            )
-            mulopadd!(other, identity, current_in, identity, m_in, true, false; alg)
-            current, other = other, current
-        end
-    end
+    absorb_matrices!(subalgorithm.contract_alg, ψ, sqrt_messages...)
     bondname = only(intersect(names(ψ), names(env[w => v])))
-    # `qr_compact` copies an allocator-backed input, also when no permutation is needed, so
-    # `Q` and `R` share no memory with the scratch (checked by pointer for both allocators).
-    Q, R = qr_compact(current, setdiff(names(ψ), [bondname], names(op)))
-    isempty(sqrt_messages) || TO.allocator_reset!(allocator, checkpoint)
+    Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
     return Q, R, invsqrt_messages
 end
 
@@ -136,36 +107,12 @@ function ITensorNetworksNext.bp_gate_restore!(
         )
     )
     alg = subalgorithm.contract_alg
-    current = Q
-    if !isempty(invsqrt_messages)
-        allocator = contract_allocator(alg)
-        checkpoint = TO.allocator_checkpoint!(allocator)
-        T = mapreduce(eltype, promote_type, invsqrt_messages; init = eltype(Q))
-        T === eltype(Q) || throw(
-            ArgumentError(
-                "`BufferedBPGateUpdate` needs messages of eltype $(eltype(Q)), got $T."
-            )
-        )
-        p = (ntuple(identity, ndims(unnamed(Q))), ())
-        other = TO.tensoralloc_add(T, unnamed(Q), p, false, Val(true), allocator)
-        other = ITensor(other, names(Q))
-        for m in invsqrt_messages
-            bond_in = map(_ -> uniquename(nametype(Q)), inputnames(m))
-            current_in = rename(current, (inputnames(m) .=> bond_in)...)
-            m_in = rename(
-                m, (inputnames(m) .=> bond_in)..., (outputnames(m) .=> inputnames(m))...
-            )
-            mulopadd!(other, identity, current_in, identity, m_in, true, false; alg)
-            current, other = other, current
-        end
-    end
+    absorb_matrices!(alg, Q, invsqrt_messages...)
     ψ = similar(
-        Q, promote_type(eltype(current), eltype(R)),
+        Q, promote_type(eltype(Q), eltype(R)),
         Tuple([setdiff(inds(Q), inds(R)); setdiff(inds(R), inds(Q))])
     )
-    mulopadd!(ψ, identity, current, identity, R, true, false; alg)
-    isempty(invsqrt_messages) || TO.allocator_reset!(allocator, checkpoint)
-    return ψ
+    return mulopadd!(ψ, identity, Q, identity, R, true, false; alg)
 end
 
 end

@@ -1,6 +1,7 @@
 using AbstractTrees: nodevalue
 using Combinatorics: combinations
-using ITensorBase: ITensor, findname, inds, mulopadd!, names, unnamed
+using ITensorBase: ITensor, findname, inds, inputnames, mulopadd!, names, nametype,
+    outputnames, rename, uniquename, unnamed
 
 """
     ContractionTreeAlgorithm
@@ -46,6 +47,32 @@ function prod_tensors!(alg, y, x, xs...; conjlist = falses(length(xs) + 1))
         x, opx = z, identity
     end
     return mulopadd!(y, opx, x, op(length(xs) + 1), last(xs), true, false; alg)
+end
+
+"""
+    absorb_matrices!(alg, ψ, matrices...) -> ψ
+
+Overwrite `ψ` with `ψ` times each operator in `matrices` in turn, as `apply` does: an
+operator's input name is a leg of `ψ`, and its output name replaces it. Contractions use
+`alg`. Throws an `ArgumentError` if the operators' element type is wider than `ψ`'s.
+"""
+function absorb_matrices!(alg, ψ, matrices...)
+    isempty(matrices) && return ψ
+    T = mapreduce(eltype, promote_type, matrices; init = eltype(ψ))
+    T === eltype(ψ) || throw(
+        ArgumentError("`absorb_matrices!` needs matrices of eltype $(eltype(ψ)), got $T.")
+    )
+    renamed = map(matrices) do m
+        bonds = inputnames(m) .=> map(_ -> uniquename(nametype(ψ)), inputnames(m))
+        return bonds, rename(m, bonds..., (outputnames(m) .=> inputnames(m))...)
+    end
+    current, other = ψ, ITensor(similar(unnamed(ψ)), names(ψ))
+    for (bonds, m) in renamed
+        mulopadd!(other, identity, rename(current, bonds...), identity, m, true, false; alg)
+        current, other = other, current
+    end
+    isodd(length(matrices)) && copyto!(ψ, current)
+    return ψ
 end
 
 # The tree that folds `labels` from the left, so `(a, b, c)` gives `((a, b), c)`.
