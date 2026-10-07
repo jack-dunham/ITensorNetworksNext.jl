@@ -1,9 +1,9 @@
-using .AlgorithmsInterfaceExtensions:
-    AlgorithmsInterfaceExtensions as AIE, StopWhenConverged, iterate_diff
+using .AlgorithmsInterfaceExtensions: AlgorithmsInterfaceExtensions as AIE,
+    RepeatUntilStopped, StopWhenConverged, SweepAlgorithm, iterate_diff
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using DataGraphs: edge_data
 using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
-using ITensorBase: AbstractITensor, operator, state
+using ITensorBase: AbstractITensor, inputnames, operator, outputnames, state
 using LinearAlgebra: norm, normalize, tr
 using NamedGraphs: forest_cover_edge_sequence, subgraph
 
@@ -64,150 +64,43 @@ an explicit `AlgorithmsInterface.StoppingCriterion`.
 `message_update_algorithm` controls how a single message is recomputed
 from its incoming neighbours.
 """
-function beliefpropagation(
-        factors, messages;
+function beliefpropagation(factors, messages; kwargs...)
+    problem = BeliefPropagationProblem(factors)
+    cache = MessageCache(messages)
+    algorithm = beliefpropagation_algorithm(factors, cache; kwargs...)
+    return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
+end
+
+"""
+    beliefpropagation_algorithm(
+        factors, cache; edges, stopping_criterion, message_update_algorithm
+    ) -> RepeatUntilStopped
+
+The algorithm [`beliefpropagation`](@ref) runs on `factors` and the `MessageCache` `cache`,
+built from the same keyword arguments.
+"""
+function beliefpropagation_algorithm(
+        factors, cache;
         edges = default_beliefpropagation_edges(factors),
         stopping_criterion = nothing,
         message_update_algorithm = nothing
     )
-    problem = BeliefPropagationProblem(factors)
-    cache = MessageCache(messages)
-
     # No concrete `edge` value here, so the args tuple uses `edgetype(factors)`.
     message_update_algorithm = select_algorithm(
         message_update!,
         message_update_algorithm,
         Tuple{typeof(cache), typeof(factors), edgetype(factors)}
     )
-    subalgorithm = BeliefPropagationSweepAlgorithm(;
-        message_update_algorithm,
-        stopping_criterion = AI.StopAfterIteration(length(edges))
-    )
+    sweep = SweepAlgorithm(; schedule = edges, update = message_update_algorithm)
     stopping_criterion = select_beliefpropagation_stopping_criterion(stopping_criterion)
-    algorithm = BeliefPropagationAlgorithm(; edges, subalgorithm, stopping_criterion)
-
-    return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
+    return RepeatUntilStopped(; subalgorithm = sweep, stopping_criterion)
 end
-
-# === Layer 1: BP outer loop (iterative) ===
 
 struct BeliefPropagationProblem{Factors} <: AI.Problem
     factors::Factors
 end
 
-@kwdef struct BeliefPropagationAlgorithm{
-        Edges,
-        Subalgorithm <: AI.Algorithm,
-        StoppingCriterion <: AI.StoppingCriterion,
-    } <: AIE.NestedAlgorithm
-    edges::Edges
-    subalgorithm::Subalgorithm
-    stopping_criterion::StoppingCriterion
-end
-
-@kwdef mutable struct BeliefPropagationState{
-        Substate <: AI.State, StoppingCriterionState <: AI.StoppingCriterionState,
-    } <: AIE.NestedState
-    substate::Substate
-    iteration::Int = 0
-    stopping_criterion_state::StoppingCriterionState
-end
-
-function AI.initialize_state(
-        problem::BeliefPropagationProblem,
-        algorithm::BeliefPropagationAlgorithm;
-        iterate, iteration::Int = 0
-    )
-    subproblem = BeliefPropagationSweepProblem(problem.factors, algorithm.edges)
-    substate = AI.initialize_state(subproblem, algorithm.subalgorithm; iterate)
-    stopping_criterion_state = AI.initialize_state(
-        problem, algorithm, algorithm.stopping_criterion; iterate
-    )
-    return BeliefPropagationState(; iteration, stopping_criterion_state, substate)
-end
-
-function AI.initialize_state!(
-        problem::BeliefPropagationProblem,
-        algorithm::BeliefPropagationAlgorithm,
-        state::BeliefPropagationState;
-        iteration::Int = 0
-    )
-    state.iteration = iteration
-    AI.initialize_state!(
-        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
-    )
-    return state
-end
-
-function AIE.initialize_subsolve(
-        problem::BeliefPropagationProblem,
-        algorithm::BeliefPropagationAlgorithm,
-        state::BeliefPropagationState
-    )
-    subproblem = BeliefPropagationSweepProblem(problem.factors, algorithm.edges)
-    return subproblem, algorithm.subalgorithm, state.substate
-end
-
-# === Layer 2: one sweep over edges (iterative) ===
-
-struct BeliefPropagationSweepProblem{Factors, Edges} <: AI.Problem
-    factors::Factors
-    edges::Edges
-end
-
-@kwdef struct BeliefPropagationSweepAlgorithm{
-        MessageUpdateAlgorithm,
-        StoppingCriterion <: AI.StoppingCriterion,
-    } <: AI.Algorithm
-    message_update_algorithm::MessageUpdateAlgorithm = SimpleMessageUpdate()
-    stopping_criterion::StoppingCriterion
-end
-
-@kwdef mutable struct BeliefPropagationSweepState{
-        Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
-    } <: AI.State
-    iterate::Iterate
-    iteration::Int = 0
-    stopping_criterion_state::StoppingCriterionState
-end
-
-function AI.initialize_state(
-        problem::BeliefPropagationSweepProblem,
-        algorithm::BeliefPropagationSweepAlgorithm;
-        iterate, iteration::Int = 0
-    )
-    stopping_criterion_state = AI.initialize_state(
-        problem, algorithm, algorithm.stopping_criterion; iterate
-    )
-    return BeliefPropagationSweepState(; iterate, iteration, stopping_criterion_state)
-end
-
-function AI.initialize_state!(
-        problem::BeliefPropagationSweepProblem,
-        algorithm::BeliefPropagationSweepAlgorithm,
-        state::BeliefPropagationSweepState;
-        iteration::Int = 0
-    )
-    state.iteration = iteration
-    AI.initialize_state!(
-        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
-    )
-    return state
-end
-
-function AI.step!(
-        problem::BeliefPropagationSweepProblem,
-        algorithm::BeliefPropagationSweepAlgorithm,
-        state::BeliefPropagationSweepState
-    )
-    edge = problem.edges[state.iteration]
-    message_update!(
-        algorithm.message_update_algorithm, state.iterate, problem.factors, edge
-    )
-    return state
-end
-
-# === Layer 3: single-edge message update strategy ===
+# === Single-edge message update strategy ===
 
 # Strategy interface: a `MessageUpdateAlgorithm` defines how a single
 # message is computed and written back into the message store. Plug in a
@@ -216,6 +109,12 @@ end
 abstract type MessageUpdateAlgorithm <: AbstractAlgorithm end
 
 function message_update! end
+
+function AIE.update!(
+        algorithm::MessageUpdateAlgorithm, cache, problem::BeliefPropagationProblem, edge
+    )
+    return message_update!(algorithm, cache, problem.factors, edge)
+end
 
 # `args` tuple mirrors the `message_update!(cache, factors, edge)` call shape.
 function default_algorithm(::typeof(message_update!), ::Type{<:Tuple}; kwargs...)
@@ -258,21 +157,27 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors, edge)
     return cache
 end
 
-# `NormNetwork`: the message is a doubled (ket/bra) bond operator. Contracting a plain vertex factor
-# with the incoming messages leaves the surviving bond legs dangling, so assign the bra/ket pairing
-# the norm network gives this edge (the same convention as `similar_message_environment`), in which
-# the message is positive semidefinite and its trace is a positive normalization.
-function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
+# Bilinear-form network: the message is a doubled (ket/bra) bond operator. Contracting a plain
+# vertex factor with the incoming messages leaves the surviving bond legs dangling, so assign the
+# bra/ket pairing the network gives this edge (the same convention as `similar_message_environment`).
+# On a `NormNetwork` the message is positive semidefinite and its trace is a positive normalization.
+function bilinearform_message_update!(
+        algorithm, cache, factors::AbstractBilinearFormNetwork, edge
+    )
     new_tensor = updated_message(algorithm, cache, factors, edge)
-    branames = linknames(branetwork(factors), edge)
-    ketnames = linknames(ketnetwork(factors), edge)
-    new_message = operator(new_tensor, branames, ketnames)
+    new_message = operator(new_tensor, outputnames(cache[edge]), inputnames(cache[edge]))
     if algorithm.normalize
         message_norm = tr(new_message)
         iszero(message_norm) || (new_message /= message_norm)
     end
     cache[edge] = new_message
     return cache
+end
+
+function message_update!(
+        algorithm::SimpleMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
 end
 
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===

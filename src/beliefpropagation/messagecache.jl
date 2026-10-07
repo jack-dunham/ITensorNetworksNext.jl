@@ -1,11 +1,12 @@
 using DataGraphs: DataGraphs, AbstractDataGraph, AbstractEdgeDataGraph, edge_data,
     edge_data_type, set_vertex_data!, underlying_graph, underlying_graph_type, vertex_data,
     vertex_data_type
-using Dictionaries: Dictionary, getindices, set!, unset!
+using Dictionaries: Dictionary, Indices, set!, unset!
 using Graphs: AbstractGraph, connected_components, is_directed, is_tree
 using ITensorBase: state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
-    boundary_edges, in_incident_edges, to_graph_index, vertextype
+    edge_subgraph, in_incident_edges, incident_edges, to_graph_index,
+    vertextype
 using SplitApplyCombine: mapmany
 
 struct MessageCache{T, V} <: AbstractEdgeDataGraph{T, V}
@@ -100,6 +101,12 @@ end
 Dictionaries.issettable(::MessageCache) = true
 Dictionaries.isinsertable(::MessageCache) = true
 
+# The messages on `edges`, in that order, as a DataGraphs view of the cache's edge data; writes
+# to an existing edge go through to the cache.
+function Base.view(cache::MessageCache, edges::AbstractVector{<:AbstractEdge})
+    return view(cache, Indices(edges))
+end
+
 function Base.map(f, cache::MessageCache)
     new_cache = similar_graph(cache, Base.promote_op(f, valtype(cache)))
     map!(f, new_cache, cache)
@@ -120,19 +127,32 @@ function incoming_messages(cache::AbstractGraph, pair::Pair)
     return incoming_messages(cache, edge)
 end
 function incoming_messages(cache::AbstractGraph, edge::AbstractEdge)
-    in_edges = Indices(in_incident_edges(cache, src(edge)))
-    return getindices(cache, filter(e -> e != reverse(edge), in_edges))
+    return environment_tensors(cache, src(edge); exclude = (dst(edge),))
 end
 
-# TODO: maybe this should be defined in `DataGraphs`.
-function incoming_edge_data(cache::AbstractGraph, vertices)
-    in_edges = Indices(boundary_edges(cache, vertices; dir = :in))
-    return getindices(cache, in_edges)
+# A vertex is anything that is not an edge or a `Pair`. `exclude` drops the tensors that touch
+# the listed neighbours of `vertex`.
+function environment_tensors(messages::AbstractGraph, vertex; exclude = ())
+    return [messages[e] for e in in_incident_edges(messages, vertex) if src(e) ∉ exclude]
 end
 
-function vertex_scalar(factors, messages, vertex; kwargs...)
-    in_messages = incoming_edge_data(messages, [vertex])
-    return contract_network([[factors[vertex]]; collect(in_messages)]; kwargs...)[]
+"""
+    incident_subgraph(graph, vertices)
+
+The subgraph of `graph` spanned by the edges with an endpoint in `vertices`. Unlike
+`subgraph`, it includes the neighbours of `vertices`, but no edge between two neighbours.
+"""
+function incident_subgraph(graph::AbstractGraph, vertices)
+    edges = mapreduce(v -> incident_edges(graph, v; dir = :both), union, vertices)
+    return edge_subgraph(graph, edges)
+end
+
+function environment_tensors(messages::AbstractGraph, edge::Union{AbstractEdge, Pair})
+    return [messages[edge], messages[reverse(edge)]]
+end
+
+function vertex_scalar(factors, env, vertex; tensor = factors[vertex], kwargs...)
+    return contract_network([[tensor]; environment_tensors(env, vertex)]; kwargs...)[]
 end
 
 vertex_scalars(factors, messages) = vertex_scalars(factors, messages, keys(factors))
@@ -146,7 +166,8 @@ function vertex_scalars(factors, messages, vertices)
 end
 
 # Takes factors as an unused argument for consistency with `vertex_scalar`.
-edge_scalar(_factors, messages, edge) = (messages[edge] * messages[reverse(edge)])[]
+edge_scalar(_factors, env, edge) = contract_network(environment_tensors(env, edge))[]
+face_scalar(_factors, env, face) = contract_network(environment_tensors(env, face))[]
 edge_scalars(factors, messages) = edge_scalars(factors, messages, edges(factors))
 function edge_scalars(factors, messages, edges)
     return narrow_map(e -> edge_scalar(factors, messages, e), edges)
@@ -172,30 +193,38 @@ function sumlog(terms)
     return s isa Real && s > 0 ? d : d + log(complex(s))
 end
 
+# Returns a tuple of numerator term collections and the denominator terms.
+function kikuchi_terms(factors, messages)
+    return (vertex_scalars(factors, messages),), edge_scalars(factors, messages)
+end
+
 # We need a graph structure here, so assume `factors` is a graph.
-function bethe_free_entropy(factors, messages)
-    numerator_terms = vertex_scalars(factors, messages)
-    denominator_terms = edge_scalars(factors, messages)
+function bethe_free_entropy(factors, env)
+    numerator_terms, denominator_terms = kikuchi_terms(factors, env)
 
     if any(iszero, denominator_terms)
         return -Inf
     end
 
-    return sumlog(numerator_terms) - sumlog(denominator_terms)
+    return sum(sumlog, numerator_terms) - sumlog(denominator_terms)
 end
 bethe_free_energy(factors, messages) = -bethe_free_entropy(factors, messages)
 
-# ===================================== NormNetwork ====================================== #
+function expect(factors, env, vertex, tensor)
+    return vertex_scalar(factors, env, vertex; tensor) / vertex_scalar(factors, env, vertex)
+end
 
-function similar_message_environment(nn::NormNetwork)
+# ============================= AbstractBilinearFormNetwork ============================== #
+
+function similar_message_environment(nn::AbstractBilinearFormNetwork)
     messages = mapmany(vertices(nn)) do vertex
         return map(in_incident_edges(nn, vertex)) do edge
-            bra = branetwork(nn)
             ket = ketnetwork(nn)
+            g = nn[src(edge)]
 
             ketnames = linknames(ket, edge)
-            branames = linknames(bra, edge)
-            braaxis = unnamed.(linkaxes(bra, edge))
+            branames = map(n -> braname(g, n), ketnames)
+            braaxis = [unnamed(i) for i in brainds(g) if name(i) in branames]
 
             # Bra leg = operator output, ket leg = input, the bipartition in which the message
             # is positive semidefinite.
@@ -208,6 +237,6 @@ function similar_message_environment(nn::NormNetwork)
     return messagecache(messages)
 end
 
-function message_environment(f::Base.Callable, nn::NormNetwork)
+function message_environment(f::Base.Callable, nn::AbstractBilinearFormNetwork)
     return map(f, similar_message_environment(nn))
 end

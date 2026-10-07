@@ -5,16 +5,17 @@ using GradedArrays: U1, gradedrange, isdual
 using Graphs: AbstractGraph, add_vertex!, dst, edges, has_edge, has_vertex, ne, nv,
     rem_edge!, src, vertices
 using ITensorBase:
-    Greedy, ITensor, Index, apply, inds, name, noprime, outputnames, prime, state
+    Greedy, ITensor, Index, apply, inds, name, noprime, operator, outputnames, prime, state
 using ITensorNetworksNext: ITensorNetworksNext, Exact, ITensorNetwork, MessageCache,
-    NormNetwork, SimpleMessageUpdate, StopWhenConverged, beliefpropagation,
-    bethe_free_energy, bethe_free_entropy, bratensor, contract_network, contraction_order,
-    edge_scalar, edge_scalars, incoming_messages, insertlink!, kettensor, linkaxes,
-    linkinds, message_environment, messagecache, region_scalar, subgraph, tensornetwork,
-    updated_message, vertex_scalar, vertex_scalars
+    NormNetwork, QuadraticFormNetwork, SimpleMessageUpdate, StopWhenConverged,
+    beliefpropagation, bethe_free_energy, bethe_free_entropy, bratensor, contract_network,
+    contraction_order, edge_scalar, edge_scalars, incident_subgraph, incoming_messages,
+    insertlink!, kettensor,
+    linkaxes, linkinds, message_environment, messagecache, region_scalar, subgraph,
+    tensornetwork, updated_message, vertex_scalar, vertex_scalars
 using LinearAlgebra: LinearAlgebra, norm, tr
-using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree, named_grid,
-    named_path_graph, vertextype
+using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree,
+    named_cycle_graph, named_grid, named_path_graph, vertextype
 using StableRNGs: StableRNG
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
 using TensorKitSectors: FermionParity
@@ -202,6 +203,29 @@ end
             @test issetequal(vertices(subbpc), sub_vs)
             @test has_edge(subbpc, (1,) => (2,))
         end
+
+        @testset "incident_subgraph" begin
+            g = named_grid((4,))
+            l = Dict(e => Index(2) for e in edges(g))
+            l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+
+            tn = tensornetwork(vertices(g)) do v
+                is = map(e -> l[e], incident_edges(g, v))
+                return randn(Tuple(is))
+            end
+            bpc = messagecache(edge -> ones(Tuple(linkinds(tn, edge))), all_edges(g))
+
+            subbpc = incident_subgraph(bpc, [(2,)])
+            @test subbpc isa MessageCache
+            @test issetequal(vertices(subbpc), [(1,), (2,), (3,)])
+            expected = NamedEdge.([(1,) => (2,), (2,) => (1,), (2,) => (3,), (3,) => (2,)])
+            @test issetequal(edges(subbpc), expected)
+            @test subbpc[(3,) => (2,)] == bpc[(3,) => (2,)]
+
+            cycle = incident_subgraph(named_cycle_graph(3), [1])
+            @test issetequal(vertices(cycle), [1, 2, 3])
+            @test ne(cycle) == 2
+        end
         @testset "diff" begin
             g = named_grid((2,))
             l = Dict(e => Index(2) for e in edges(g))
@@ -349,6 +373,30 @@ end
                     eps(real(T))^(1 / 3)
             end
         end
+    end
+
+    @testset "QuadraticFormNetwork, T=$T" for T in (Float64, ComplexF64)
+        rng = StableRNG(123)
+        g = named_path_graph(4)
+        s = Dict(v => Index(2) for v in vertices(g))
+        network = tensornetwork(v -> randn(rng, T, (s[v],)), vertices(g))
+        for edge in edges(g)
+            insertlink!(network, edge)
+        end
+        out = Dict(v => Index(2) for v in vertices(g))
+        ops = tensornetwork(v -> randn(rng, T, (out[v], s[v])), vertices(g))
+        vs = collect(vertices(g))
+        op = operator(ops, [name(out[v]) for v in vs], [name(s[v]) for v in vs])
+        qf = QuadraticFormNetwork(network, op)
+
+        cache = beliefpropagation(
+            qf, message_environment(one, qf); stopping_criterion = (; maxiter = 10)
+        )
+        @test all(msg -> !isempty(outputnames(msg)), edge_data(cache))
+
+        # Belief propagation is exact on a tree, including around an operator layer.
+        z_exact = contract_network([qf[v] for v in vertices(qf)])[]
+        @test exp(bethe_free_entropy(qf, cache)) ≈ z_exact rtol = eps(real(T))^(1 / 3)
     end
 
     @testset "Doubled-vertex contraction operands" begin
