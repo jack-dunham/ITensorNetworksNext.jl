@@ -1,7 +1,8 @@
 using DataGraphs: is_vertex_assigned
 using Dictionaries: isinsertable, issettable
 using Graphs: edges, vertices
-using ITensorBase: ITensor, Index, IndexName, LazyITensor, inds, name, names, uniquename
+using ITensorBase:
+    ITensor, Index, IndexName, LazyITensor, inds, name, names, nametype, uniquename
 using ITensorNetworksNext: ITensorNetworksNext, BraView, Exact, ITensorNetwork, NormGramian,
     NormNetwork, braname, branetwork, bratensor, conj_bratensor, contract_network,
     contraction_order, dimnamevertices, ketnetwork, kettensor, linkaxes, linkinds,
@@ -39,6 +40,7 @@ end
 
         # `eltype` is the type of the (lazy double-layer) vertex data.
         @test eltype(nn) === typeof(nn[1])
+        @test nametype(nn) === nametype(tn) === IndexName
 
         # Vertex data is assigned wherever the underlying network is.
         @test is_vertex_assigned(nn, 1)
