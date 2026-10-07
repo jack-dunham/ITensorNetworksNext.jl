@@ -1,8 +1,9 @@
 using DiagonalArrays: diagview, setdiagindices!
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
-using ITensorBase: AbstractNamedTensor, Index, unnamed
+using ITensorBase: AbstractNamedTensor, Index, IndexName, name, setname, unnamed
 using NamedGraphs: NamedEdge, all_edges
+using UUIDs: UUID, uuid5
 
 struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache, I}
     embedding::PlanarEmbedding{V}
@@ -20,6 +21,13 @@ edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
 envinds(env::CTMEnvironment, edge) = (env.bonds[NamedEdge(edge)],)
+
+# Bond names are hashed from the edge or from the bond they replace, so that every process
+# building the same environment gives each bond the same name.
+const BOND_NAMESPACE = UUID("4f231e03-f233-4684-80a2-63f028edc951")
+bond_index(id::UUID, n) = setname(Index(n), IndexName(; uuid = id))
+initial_bond(edge) = bond_index(uuid5(BOND_NAMESPACE, string(edge)), 1)
+next_bond(bond, n) = bond_index(uuid5(name(bond).uuid, "next"), n)
 
 # Two-index tensor over `row` and `column` with `diagonal` on its diagonal; every corner is one.
 function diagonal_tensor(diagonal, row, column)
@@ -44,7 +52,7 @@ The χ = 1 environment whose edge tensors are the BP `messages` and whose corner
 """
 function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     embedding_edges = collect(all_edges(embedding.graph))
-    bonds = Dictionary(embedding_edges, [Index(1) for _ in embedding_edges])
+    bonds = Dictionary(embedding_edges, initial_bond.(embedding_edges))
     elt = eltype(messages[first(embedding_edges)])
 
     edgetensors = messagecache(embedding_edges) do edge
