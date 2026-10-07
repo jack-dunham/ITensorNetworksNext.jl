@@ -18,7 +18,7 @@ TensorOperations loaded.
     contract_alg::ContractAlg = TensorOperationsContract()
 end
 
-function ITensorNetworksNext.bp_gate_factorize!(
+function bp_gate_factorize!(
         subalgorithm::BufferedBPGateUpdate{<:TensorOperationsContract}, op::AbstractITensor,
         state, env, v, w
     )
@@ -37,7 +37,7 @@ function ITensorNetworksNext.bp_gate_factorize!(
     return Q, R, invsqrt_messages
 end
 
-function ITensorNetworksNext.bp_gate_restore!(
+function bp_gate_restore!(
         subalgorithm::BufferedBPGateUpdate{<:TensorOperationsContract},
         Q::AbstractITensor, R::AbstractITensor, invsqrt_messages
     )
