@@ -1,7 +1,7 @@
 using DiagonalArrays: diagview
 using Dictionaries: Dictionary, set!
 using Graphs: degree, dst, src
-using ITensorBase: ITensorBase, inds, name, names, state, unnamed
+using ITensorBase: ITensorBase, Index, NamedOneTo, inds, name, names, state, unnamed
 using LinearAlgebra: inv, norm
 
 function cutinds(tn, env::CTMEnvironment, edge)
@@ -95,7 +95,8 @@ function set_face_corners!(env::CTMEnvironment, face, eigenvalues; bondnames = n
     new_bonds = map(Dictionary(face, face)) do edge
         old_bond = only(envinds(env, edge))
         length(old_bond) == length(roots) && return old_bond
-        return bond_index(length(roots), isnothing(bondnames) ? nothing : bondnames[edge])
+        n = length(roots)
+        return isnothing(bondnames) ? Index(n) : NamedOneTo(n, bondnames[edge])
     end
     for edge in face
         row, column = new_bonds[edge], new_bonds[nextedge(env.embedding, edge)]
