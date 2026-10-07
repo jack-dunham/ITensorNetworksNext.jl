@@ -1,7 +1,7 @@
 using DiagonalArrays: diagview
 using Dictionaries: Dictionary, set!
 using Graphs: degree, dst, src
-using ITensorBase: ITensorBase, Index, commoninds, inds, name, names, state, unnamed
+using ITensorBase: ITensorBase, Index, inds, name, names, state, unnamed
 using LinearAlgebra: inv, norm
 
 function cutinds(tn, env::CTMEnvironment, edge)
@@ -81,8 +81,8 @@ function face_solve(
     return eigenvalues, right_basis, left_basis
 end
 
-# Writes each corner of `face`, keeping a bond's index while its dimension is unchanged. Bonds
-# are read off corners, so all are read before any is written.
+# Writes each corner of `face` and each of its bonds, keeping a bond's index while its dimension
+# is unchanged.
 function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
     # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
     # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
@@ -99,6 +99,7 @@ function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
     for edge in face
         row, column = new_bonds[edge], new_bonds[nextedge(env.embedding, edge)]
         env.cornertensors[edge] = diagonal_tensor(roots, row, column)
+        env.bonds[edge] = new_bonds[edge]
     end
     return env
 end
