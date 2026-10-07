@@ -144,6 +144,16 @@ const LATTICES = (
             1.0e-8
     end
 
+    @testset "Separate runs give every bond the same index" begin
+        g = named_grid((4, 4))
+        tn, _ = ising_setup(g, 0.4)
+        emb = planar_embedding(g, v -> v)
+        env1 = ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)
+        env2 = ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)
+        @test all(e -> envinds(env1, e) == envinds(env2, e), all_edges(g))
+        @test any(e -> length(only(envinds(env1, e))) == 2, all_edges(g))
+    end
+
     @testset "Z_B and magnetisation converge to exact ($lattice)" for (lattice, g, pos) in
         LATTICES
 
