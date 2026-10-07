@@ -150,9 +150,21 @@ end
 # Writes both edge tensors on the face edge `edge` from that face's projectors at its cut. It
 # reads the neighbouring face's corners, which must be those the projectors were built with.
 function set_face_edge!(env::CTMEnvironment, edge, right_projector, left_projector)
+    set_right_edge!(env, edge, right_projector)
+    set_left_edge!(env, edge, left_projector)
+    return env
+end
+
+# The edge tensor on `reverse(edge)`, at `src(edge)`, from the right projector at `edge`.
+function set_right_edge!(env::CTMEnvironment, edge, right_projector)
     reversed = reverse(edge)
-    previous = prevedge(env.embedding, reversed)
     env.edgetensors[reversed] = right_projector * diaginv(cornertensor(env, reversed))
+    return env
+end
+
+# The edge tensor on `edge`, at `dst(edge)`, from the left projector at `edge`.
+function set_left_edge!(env::CTMEnvironment, edge, left_projector)
+    previous = prevedge(env.embedding, reverse(edge))
     env.edgetensors[edge] = left_projector * diaginv(cornertensor(env, previous))
     return env
 end
