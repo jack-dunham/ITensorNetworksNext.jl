@@ -1,25 +1,25 @@
 using DiagonalArrays: diagview, setdiagindices!
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
-using ITensorBase: AbstractNamedTensor, Index, commoninds, unnamed
+using ITensorBase: AbstractNamedTensor, Index, unnamed
 using NamedGraphs: NamedEdge, all_edges
 
-struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache}
+struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache, I}
     embedding::PlanarEmbedding{V}
     edgetensors::E
     cornertensors::C
     # Each face's `(right_basis, left_basis)` from its last update, which the next one aligns
     # onto.
     bases::Dict{NamedFace{V}, Tuple{AbstractNamedTensor, AbstractNamedTensor}}
+    # The bond of each directed edge, which its corner shares with the corner before it. Kept
+    # here so that a bond can be read without the corner at the edge's far end.
+    bonds::Dictionary{NamedEdge{V}, I}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
-function envinds(env::CTMEnvironment, edge)
-    previous = prevedge(env.embedding, edge)
-    return Tuple(commoninds(cornertensor(env, edge), cornertensor(env, previous)))
-end
+envinds(env::CTMEnvironment, edge) = (env.bonds[NamedEdge(edge)],)
 
 # Two-index tensor over `row` and `column` with `diagonal` on its diagonal; every corner is one.
 function diagonal_tensor(diagonal, row, column)
@@ -33,7 +33,7 @@ corner_diagonal(env::CTMEnvironment, edge) = diagview(unnamed(cornertensor(env, 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
         env.embedding, map(identity, env.edgetensors), map(identity, env.cornertensors),
-        copy(env.bases)
+        copy(env.bases), copy(env.bonds)
     )
 end
 
@@ -57,7 +57,8 @@ function ctm_environment(tn, embedding::PlanarEmbedding, messages)
 
     return CTMEnvironment(
         embedding, edgetensors, corners,
-        Dict{eltype(embedding.faces), Tuple{AbstractNamedTensor, AbstractNamedTensor}}()
+        Dict{eltype(embedding.faces), Tuple{AbstractNamedTensor, AbstractNamedTensor}}(),
+        bonds
     )
 end
 
