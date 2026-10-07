@@ -39,24 +39,30 @@ end
 The χ = 1 environment whose edge tensors are the BP `messages` and whose corners are all 1.
 `bondnames` maps each directed edge to the name of its bond; by default the names are new.
 """
-function ctm_environment(tn, embedding::PlanarEmbedding, messages; bondnames = nothing)
-    embedding_edges = collect(all_edges(embedding.graph))
-    bond(edge) = isnothing(bondnames) ? Index(1) : NamedOneTo(1, bondnames[edge])
-    envinds = Dictionary(embedding_edges, [(bond(edge),) for edge in embedding_edges])
-    elt = eltype(messages[first(embedding_edges)])
+function ctm_environment(
+        tn, embedding::PlanarEmbedding, messages;
+        bondnames = map(_ -> uniquename(nametype(tn)), Indices(all_edges(tn)))
+    )
+    edges = all_edges(tn)
+    @assert issetequal(edges, all_edges(embedding.graph))
 
-    edgetensors = messagecache(embedding_edges) do edge
-        return messages[edge] * ones(elt, envinds[nextedge(embedding, edge)]) *
-            ones(elt, envinds[prevedge(embedding, reverse(edge))])
+    bondinds = map(name -> (NamedOneTo(1, name),), Dictionary(bondnames))
+
+    T = eltype(first(messages))
+
+    edgetensors = messagecache(edges) do edge
+        return messages[edge] *
+            ones(T, bondinds[nextedge(embedding, edge)]) *
+            ones(T, bondinds[prevedge(embedding, reverse(edge))])
     end
-    corners = messagecache(embedding_edges) do edge
-        return ones(elt, (envinds[edge]..., envinds[nextedge(embedding, edge)]...))
+    corners = messagecache(edges) do edge
+        return ones(T, (bondinds[edge]..., bondinds[nextedge(embedding, edge)]...))
     end
 
     return CTMEnvironment(
         embedding, edgetensors, corners,
         Dict{eltype(embedding.faces), Tuple{AbstractNamedTensor, AbstractNamedTensor}}(),
-        envinds
+        bondinds
     )
 end
 
