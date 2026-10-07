@@ -1,5 +1,5 @@
 using Graphs: dst, edges, src, vertices
-using ITensorBase: Index, NamedTensor, align, inds, name, unnamed
+using ITensorBase: Index, IndexName, NamedTensor, align, inds, name, unnamed
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: CornerTransferProduct, DenseEig, ITensorNetwork,
     beliefpropagation, bethe_free_entropy, contract_network, ctm_environment, ctmrg,
@@ -144,14 +144,24 @@ const LATTICES = (
             1.0e-8
     end
 
-    @testset "Separate runs give every bond the same index" begin
+    @testset "`bondnames` names the bonds" begin
         g = named_grid((4, 4))
         tn, _ = ising_setup(g, 0.4)
         emb = planar_embedding(g, v -> v)
-        env1 = ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)
-        env2 = ctmrg(tn, emb; maxdim = 2, stopping_criterion = sc)
-        @test all(e -> envinds(env1, e) == envinds(env2, e), all_edges(g))
-        @test any(e -> length(only(envinds(env1, e))) == 2, all_edges(g))
+        messages = beliefpropagation(
+            tn, bp_messages(tn, g);
+            stopping_criterion = (; maxiter = 100, tol = 1.0e-14)
+        )
+        initial_names = Dict(e => IndexName() for e in all_edges(g))
+        env = ctm_environment(tn, emb, messages; bondnames = initial_names)
+        @test all(e -> name(only(envinds(env, e))) == initial_names[e], all_edges(g))
+        face = first(emb.faces)
+        new_names = Dict(e => IndexName() for e in face)
+        face_update!(env, tn, face; maxdim = 2, alg = DenseEig(), bondnames = new_names)
+        @test all(face) do e
+            bond = only(envinds(env, e))
+            return length(bond) == 2 && name(bond) == new_names[e]
+        end
     end
 
     @testset "Z_B and magnetisation converge to exact ($lattice)" for (lattice, g, pos) in
