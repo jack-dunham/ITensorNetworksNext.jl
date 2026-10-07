@@ -103,7 +103,7 @@ function set_face_corners!(env::CTMEnvironment, face, eigenvalues)
     for edge in face
         row, column = new_bonds[edge], new_bonds[nextedge(env.embedding, edge)]
         env.cornertensors[edge] = diagonal_tensor(roots, row, column)
-        env.envinds[edge] = new_bonds[edge]
+        env.envinds[edge] = (new_bonds[edge],)
     end
     return env
 end

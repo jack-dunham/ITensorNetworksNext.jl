@@ -9,18 +9,14 @@ struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache, I}
     embedding::PlanarEmbedding{V}
     edgetensors::E
     cornertensors::C
-    # Each face's `(right_basis, left_basis)` from its last update, which the next one aligns
-    # onto.
     bases::Dict{NamedFace{V}, Tuple{AbstractNamedTensor, AbstractNamedTensor}}
-    # The bond of each directed edge, which its corner shares with the corner before it. Kept
-    # here so that a bond can be read without the corner at the edge's far end.
     envinds::Dictionary{NamedEdge{V}, I}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
 # The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
-envinds(env::CTMEnvironment, edge) = (env.envinds[NamedEdge(edge)],)
+envinds(env::CTMEnvironment, edge) = env.envinds[NamedEdge(edge)]
 
 # Bond names are hashed from the edge or from the bond they replace, so that every process
 # building the same environment gives each bond the same name.
@@ -52,15 +48,16 @@ The χ = 1 environment whose edge tensors are the BP `messages` and whose corner
 """
 function ctm_environment(tn, embedding::PlanarEmbedding, messages)
     embedding_edges = collect(all_edges(embedding.graph))
-    envinds = Dictionary(embedding_edges, initial_bond.(embedding_edges))
+    envinds =
+        Dictionary(embedding_edges, [(initial_bond(edge),) for edge in embedding_edges])
     elt = eltype(messages[first(embedding_edges)])
 
     edgetensors = messagecache(embedding_edges) do edge
-        return messages[edge] * ones(elt, (envinds[nextedge(embedding, edge)],)) *
-            ones(elt, (envinds[prevedge(embedding, reverse(edge))],))
+        return messages[edge] * ones(elt, envinds[nextedge(embedding, edge)]) *
+            ones(elt, envinds[prevedge(embedding, reverse(edge))])
     end
     corners = messagecache(embedding_edges) do edge
-        return ones(elt, (envinds[edge], envinds[nextedge(embedding, edge)]))
+        return ones(elt, (envinds[edge]..., envinds[nextedge(embedding, edge)]...))
     end
 
     return CTMEnvironment(
