@@ -282,11 +282,13 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors, edge)
     return cache
 end
 
-# `NormNetwork`: the message is a doubled (ket/bra) bond operator. Contracting a plain vertex factor
-# with the incoming messages leaves the surviving bond legs dangling, so assign the bra/ket pairing
-# the norm network gives this edge (the same convention as `similar_message_environment`), in which
-# the message is positive semidefinite and its trace is a positive normalization.
-function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
+# Bilinear-form network: the message is a doubled (ket/bra) bond operator. Contracting a plain
+# vertex factor with the incoming messages leaves the surviving bond legs dangling, so assign the
+# bra/ket pairing the network gives this edge (the same convention as `similar_message_environment`).
+# On a `NormNetwork` the message is positive semidefinite and its trace is a positive normalization.
+function bilinearform_message_update!(
+        algorithm, cache, factors::AbstractBilinearFormNetwork, edge
+    )
     new_tensor = updated_message(algorithm, cache, factors, edge)
     new_message = operator(new_tensor, outputnames(cache[edge]), inputnames(cache[edge]))
     if algorithm.normalize
@@ -295,6 +297,12 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNet
     end
     cache[edge] = new_message
     return cache
+end
+
+function message_update!(
+        algorithm::SimpleMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
 end
 
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===
