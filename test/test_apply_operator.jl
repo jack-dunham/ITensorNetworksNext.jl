@@ -150,8 +150,8 @@ end
         gated = copy(network)
         gated[2], gated[3] = copy(network[2]), copy(network[3])
         simple = SimpleBPGateUpdate()
-        Q_2, R_2, invsqrt_2, buffer_2 = bp_gate_factorize!(simple, gate, gated, env, 2, 3)
-        Q_3, R_3, invsqrt_3, buffer_3 = bp_gate_factorize!(simple, gate, gated, env, 3, 2)
+        Q_2, R_2, invsqrt_2 = bp_gate_factorize!(simple, gate, gated, env, 2, 3)
+        Q_3, R_3, invsqrt_3 = bp_gate_factorize!(simple, gate, gated, env, 3, 2)
         bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
         R_2, R_3, message_23, message_32 = bp_gate_split(
             simple, gate, R_2, R_3; trunc = nothing, normalize = false, bondnames
@@ -161,8 +161,8 @@ end
             @test only(inputnames(message)) == bondnames[1]
             @test only(outputnames(message)) == bondnames[2]
         end
-        gated[2] = bp_gate_restore!(simple, Q_2, R_2, invsqrt_2, buffer_2)
-        gated[3] = bp_gate_restore!(simple, Q_3, R_3, invsqrt_3, buffer_3)
+        gated[2] = bp_gate_restore!(simple, Q_2, R_2, invsqrt_2)
+        gated[3] = bp_gate_restore!(simple, Q_3, R_3, invsqrt_3)
         @test prod(gated) ≈ apply(gate, prod(network)) rtol = eps(real(T))^(1 / 3)
     end
 
