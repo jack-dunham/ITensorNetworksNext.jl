@@ -1,6 +1,6 @@
 module ITensorNetworksNextTensorOperationsExt
 
-using ITensorBase: ITensor, mulopadd!, names, unnamed
+using ITensorBase: ITensor, inds, mulopadd!, names, rename, unnamed
 using ITensorNetworksNext: ITensorNetworksNext, BlockedMessageUpdate, default_nblocks
 using TensorAlgebra: TensorOperationsContract
 using TensorOperations: TensorOperations as TO
@@ -71,6 +71,41 @@ function ITensorNetworksNext.prod_tensors!(
     length(xs) > 1 && TO.tensorfree!(unnamed(x), allocator)
     TO.allocator_reset!(allocator, checkpoint)
     return y
+end
+
+# Dense square matrices, both legs on one axis, reuse `t`'s memory and one allocator scratch
+# tensor, freed on return; anything else takes the generic method.
+function ITensorNetworksNext.absorb_matrices!(
+        alg::TensorOperationsContract, t, matrices...
+    )
+    isempty(matrices) && return t
+    dense = unnamed(t) isa DenseArray
+    square = all(m -> eltype(m) === eltype(t) && allequal(unnamed.(inds(m))), matrices)
+    if !dense || !square
+        return invoke(
+            ITensorNetworksNext.absorb_matrices!, Tuple{Any, Any, Vararg{Any}},
+            alg, t, matrices...
+        )
+    end
+
+    allocator = contract_allocator(alg)
+    checkpoint = TO.allocator_checkpoint!(allocator)
+    p = (ntuple(identity, ndims(unnamed(t))), ())
+    scratch = TO.tensoralloc_add(eltype(t), unnamed(t), p, false, Val(true), allocator)
+    x, other = t, ITensor(scratch, names(t))
+    for m in matrices
+        shared, added = intersect(names(m), names(x)), setdiff(names(m), names(x))
+        labels = replace(names(x), only(shared) => only(added))
+        y = rename(other, (names(other) .=> labels)...)
+        mulopadd!(y, identity, x, identity, m, true, false; alg)
+        x, other = y, x
+    end
+    if isodd(length(matrices))
+        x = copyto!(rename(t, (names(t) .=> names(x))...), x)
+    end
+    TO.tensorfree!(scratch, allocator)
+    TO.allocator_reset!(allocator, checkpoint)
+    return x
 end
 
 end
