@@ -4,7 +4,7 @@ using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, outputnames,
     setname, uniquename
 using ITensorNetworksNext: ITensorNetworksNext, BPApplyGate,
-    BeliefPropagationEnvironmentPreparation, MessageUpdateAlgorithm,
+    BeliefPropagationEnvironmentPreparation, BufferedBPGateUpdate, MessageUpdateAlgorithm,
     NormNetwork, SimpleBPGateUpdate, SimpleMessageUpdate, StopWhenVertexRevisited,
     apply_operator, apply_operator!, apply_operators, apply_operators!, beliefpropagation,
     bp_gate_factorize!, bp_gate_restore!, bp_gate_split, branamemap, insertlink!,
@@ -14,7 +14,9 @@ using MatrixAlgebraKit: svd_trunc, truncrank
 using NamedGraphs: named_cycle_graph, named_grid, named_path_graph
 using Random: AbstractRNG
 using StableRNGs: StableRNG
+using TensorAlgebra: TensorOperationsContract
 using TensorKitSectors: FermionParity
+using TensorOperations: TensorOperations as TO
 using Test: @test, @test_throws, @testset
 
 const spinone = Base.OneTo(3)
@@ -179,6 +181,8 @@ end
     end
 end
 
+# The middle vertices have degree 3, so `BufferedBPGateUpdate` applies two message roots and
+# overwrites `state[v]`.
 @testset "apply_operators! and input preservation (T=$T)" for T in
     (Float32, Float64, ComplexF64)
     rng = StableRNG(123)
@@ -193,12 +197,51 @@ end
     ]
     snapshot = Dict(v => copy(network[v]) for v in vertices(g))
     rtol = eps(real(T))^(1 / 3)
+    buffered = BPApplyGate(; trunc = truncrank(2), subalgorithm = BufferedBPGateUpdate())
 
     @testset "apply_operators leaves its input unchanged" begin
         apply_operators(gates, network, env; trunc = truncrank(2))
         @test all(v -> network[v] == snapshot[v], vertices(g))
         apply_operator(gates[1], network, env; trunc = truncrank(2))
         @test all(v -> network[v] == snapshot[v], vertices(g))
+        apply_operators(gates, network, env; operator_alg = buffered)
+        @test all(v -> network[v] == snapshot[v], vertices(g))
+        apply_operator(gates[1], network, env; alg = buffered)
+        @test all(v -> network[v] == snapshot[v], vertices(g))
+    end
+
+    @testset "BufferedBPGateUpdate matches SimpleBPGateUpdate" begin
+        gated, gated_env = apply_operators(gates, network, env; trunc = truncrank(2))
+        buffered_state, buffered_env =
+            apply_operators(gates, network, env; operator_alg = buffered)
+        # The two runs mint different bond names, so compare name-independent quantities.
+        @test prod(buffered_state) ≈ prod(gated) rtol = rtol
+        for edge in edges(gated_env)
+            @test norm(buffered_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
+        end
+    end
+
+    @testset "BufferedBPGateUpdate with a BufferAllocator matches SimpleBPGateUpdate" begin
+        contract_alg = TensorOperationsContract(; allocator = TO.BufferAllocator())
+        subalgorithm = BufferedBPGateUpdate(; contract_alg)
+        operator_alg = BPApplyGate(; trunc = truncrank(2), subalgorithm)
+        gated, gated_env = apply_operators(gates, network, env; trunc = truncrank(2))
+        buffered_state, buffered_env = apply_operators(gates, network, env; operator_alg)
+        @test prod(buffered_state) ≈ prod(gated) rtol = rtol
+        for edge in edges(gated_env)
+            @test norm(buffered_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
+        end
+    end
+
+    T <: Real && @testset "BufferedBPGateUpdate rejects complex messages" begin
+        complex_env = copy(env)
+        for edge in edges(env)
+            complex_env[edge] = (1 + 0im) * env[edge]
+        end
+        buffered = BPApplyGate(; subalgorithm = BufferedBPGateUpdate())
+        @test_throws ArgumentError apply_operator(
+            gates[1], network, complex_env; alg = buffered
+        )
     end
 
     @testset "apply_operators! matches apply_operators" begin
@@ -212,7 +255,7 @@ end
     end
 
     @testset "apply_operator! names the new bond as requested ($subalgorithm)" for
-        subalgorithm in (SimpleBPGateUpdate(),)
+        subalgorithm in (SimpleBPGateUpdate(), BufferedBPGateUpdate())
         algorithm = BPApplyGate(; subalgorithm)
         gated, gated_env = copy(network), copy(env)
         for v in vertices(g)
@@ -230,6 +273,19 @@ end
         end
         @test prod(gated) ≈ apply(gates[1], prod(network)) rtol = rtol
     end
+end
+
+@testset "BufferedBPGateUpdate rejects graded storage" begin
+    rng = StableRNG(123)
+    g = named_path_graph(3)
+    site_axes = Dict(v => Index(spinone_u1) for v in vertices(g))
+    network, env =
+        random_state(rng, Float64, g, site_axes; nlayers = 1, trunc = truncrank(4))
+    gate = randn_operator(rng, Float64, (site_axes[1], site_axes[2]))
+    @test_throws ArgumentError apply_operators(
+        [gate], network, env;
+        operator_alg = BPApplyGate(; subalgorithm = BufferedBPGateUpdate())
+    )
 end
 
 @testset "BeliefPropagationEnvironmentPreparation (T=$T)" for T in (Float64, ComplexF64)
