@@ -535,8 +535,7 @@ The data of `state[v]` may be overwritten.
 shares with `env[w => v]`.
 """
 function bp_gate_factorize!(::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w)
-    edges_in = [e for e in boundary_edges(env, [v]; dir = :in) if src(e) != w]
-    roots = [message_gauge(env[e]) for e in edges_in]
+    roots = [message_gauge(m) for m in incoming_messages(env, v => w)]
     ψ = foldl((ψ, (x, _)) -> x * ψ, roots; init = state[v])
     bondname = only(intersect(names(state[v]), names(env[w => v])))
     Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
