@@ -8,13 +8,12 @@ using ITensorNetworksNext: ITensorNetworksNext, BPApplyGate,
     NormNetwork, SimpleBPGateUpdate, SimpleMessageUpdate, StopWhenVertexRevisited,
     apply_operator, apply_operator!, apply_operators, apply_operators!, beliefpropagation,
     bp_gate_factorize!, bp_gate_restore!, bp_gate_split, insertlink!, message_environment,
-    message_normnetwork, tensornetwork
+    message_gauge, message_normnetwork, tensornetwork
 using LinearAlgebra: norm
 using MatrixAlgebraKit: svd_trunc, truncrank
 using NamedGraphs: named_cycle_graph, named_grid, named_path_graph
 using Random: AbstractRNG
 using StableRNGs: StableRNG
-using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
 using TensorKitSectors: FermionParity
 using Test: @test, @test_throws, @testset
 
@@ -150,8 +149,8 @@ end
         gated = copy(network)
         gated[2], gated[3] = copy(network[2]), copy(network[3])
         simple = SimpleBPGateUpdate()
-        Q_2, R_2, invsqrt_2 = bp_gate_factorize!(simple, gate, gated, env, 2, 3)
-        Q_3, R_3, invsqrt_3 = bp_gate_factorize!(simple, gate, gated, env, 3, 2)
+        Q_2, R_2, inverse_roots_2 = bp_gate_factorize!(simple, gate, gated, env, 2, 3)
+        Q_3, R_3, inverse_roots_3 = bp_gate_factorize!(simple, gate, gated, env, 3, 2)
         bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
         R_2, R_3, message_23, message_32 = bp_gate_split(
             simple, gate, R_2, R_3; trunc = nothing, normalize = false, bondnames
@@ -161,8 +160,8 @@ end
             @test only(inputnames(message)) == bondnames[1]
             @test only(outputnames(message)) == bondnames[2]
         end
-        gated[2] = bp_gate_restore!(simple, Q_2, R_2, invsqrt_2)
-        gated[3] = bp_gate_restore!(simple, Q_3, R_3, invsqrt_3)
+        gated[2] = bp_gate_restore!(simple, Q_2, R_2, inverse_roots_2)
+        gated[3] = bp_gate_restore!(simple, Q_3, R_3, inverse_roots_3)
         @test prod(gated) ≈ apply(gate, prod(network)) rtol = eps(real(T))^(1 / 3)
     end
 
@@ -174,9 +173,8 @@ end
         rtol = eps(real(T))^(1 / 3)
 
         for (edge, v) in ((2 => 3, 3), (3 => 2, 2))
-            sqrt_message, invsqrt_message = sqrth_invsqrth_safe(env[edge])
-            @test apply(invsqrt_message, apply(sqrt_message, network[v])) ≈ network[v] rtol =
-                rtol
+            x, y = message_gauge(env[edge])
+            @test y * (x * network[v]) ≈ network[v] rtol = rtol
         end
     end
 end
