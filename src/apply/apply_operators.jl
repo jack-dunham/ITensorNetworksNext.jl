@@ -511,10 +511,8 @@ function apply_gate_bp_nsite!(
         trunc, normalize, subalgorithm, bondnames = nothing
     )
     v1, v2 = vertices
-    Q_v1, R_v1, inverse_roots_v1 =
-        bp_gate_factorize!(subalgorithm, op, state, env, v1, v2)
-    Q_v2, R_v2, inverse_roots_v2 =
-        bp_gate_factorize!(subalgorithm, op, state, env, v2, v1)
+    Q_v1, R_v1, inverse_roots_v1 = bp_gate_factorize!(subalgorithm, op, state, env, v1, v2)
+    Q_v2, R_v2, inverse_roots_v2 = bp_gate_factorize!(subalgorithm, op, state, env, v2, v1)
     R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
         subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames
     )
