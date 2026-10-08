@@ -181,7 +181,7 @@ end
     end
 end
 
-# The middle vertices have degree 3, so `BufferedBPGateUpdate` applies two √messages and
+# The middle vertices have degree 3, so `BufferedBPGateUpdate` applies two message roots and
 # overwrites `state[v]`.
 @testset "apply_operators! and input preservation (T=$T)" for T in
     (Float32, Float64, ComplexF64)
