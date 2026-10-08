@@ -396,7 +396,7 @@ end
         @test all(msg -> !isempty(outputnames(msg)), edge_data(cache))
 
         # Belief propagation is exact on a tree, including around an operator layer.
-        z_exact = contract_network([qf[v] for v in vertices(qf)])[]
+        z_exact = prod_tensors([t for v in vertices(qf) for t in factor_tensors(qf, v)])[]
         @test exp(bethe_free_entropy(qf, cache)) ≈ z_exact rtol = eps(real(T))^(1 / 3)
     end
 

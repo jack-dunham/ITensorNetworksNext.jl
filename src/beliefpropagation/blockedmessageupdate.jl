@@ -1,5 +1,5 @@
 using Graphs: src
-using ITensorBase: ITensorBase, inds, inputnames, names, outputnames, rename, state, unnamed
+using ITensorBase: ITensorBase, inds, inputnames, names, outputnames, state, unnamed
 using TensorAlgebra: TensorOperationsContract
 
 """
@@ -61,14 +61,16 @@ end
 
 # The ket and the tensors each block contracts into its slice in turn, checked before any
 # contraction runs.
-function message_contraction_tensors(algorithm, factor::NormGramian, messages)
+function message_contraction_tensors(algorithm, factors::NormNetwork, messages, vertex)
     rest = map(state, collect(messages))
-    return checked_tensors(algorithm, kettensor(factor), rest)
+    return checked_tensors(algorithm, kettensor(factors, vertex), rest)
 end
 # The operator is one more step of the block contraction, so it may carry only its paired site
 # indices: a link index to a neighbouring operator would be a third leg on the message.
-function message_contraction_tensors(algorithm, factor::QuadraticFormGramian, messages)
-    op = factor.operator
+function message_contraction_tensors(
+        algorithm, factors::QuadraticFormNetwork, messages, vertex
+    )
+    op = operatornetwork(factors)[vertex]
 
     linkinds = setdiff(names(op), [inputnames(op); outputnames(op)])
 
@@ -81,9 +83,9 @@ function message_contraction_tensors(algorithm, factor::QuadraticFormGramian, me
         )
     end
 
-    rest = [operatortensor(factor); map(state, collect(messages))]
+    rest = [operatortensor(factors, vertex); map(state, collect(messages))]
 
-    return checked_tensors(algorithm, kettensor(factor), rest)
+    return checked_tensors(algorithm, kettensor(factors, vertex), rest)
 end
 
 # Non-dense storage cannot be sliced by column.
@@ -103,17 +105,17 @@ end
 function updated_message(
         algorithm::BlockedMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
     )
-    factor = factors[src(edge)]
+    vertex = src(edge)
     messages = incoming_messages(cache, edge)
 
-    ket, rest = message_contraction_tensors(algorithm, factor, messages)
+    ket, rest = message_contraction_tensors(algorithm, factors, messages, vertex)
 
     # Shares the ket's data; the closing contraction conjugates it through its `conj` op.
-    bra = rename(n -> braname(factor, n), ket)
+    bra = conj_bratensor(factors, vertex)
     # The far vertex of `edge` may not be in `factors`, so the leg is found on the message.
     ketdimname = only(intersect(names(cache[edge]), names(ket)))
 
-    χ = size(ket, ITensorBase.dim(ket, ketdimname))
+    χ = size(ket, ITensorBase.findname(ket, ketdimname))
 
     nblocks = min(default_nblocks(algorithm, unnamed(ket), χ), χ)
 
