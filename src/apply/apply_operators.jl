@@ -430,17 +430,26 @@ end
 
 # === Default strategy: BPApplyGate ===
 
-@kwdef struct BPApplyGate{Trunc} <: ApplyOperatorAlgorithm
+"""
+    SimpleBPGateUpdate()
+
+The gate stages of [`BPApplyGate`](@ref) that allocate a new tensor at every step.
+"""
+struct SimpleBPGateUpdate end
+
+@kwdef struct BPApplyGate{Trunc, Subalgorithm} <: ApplyOperatorAlgorithm
     trunc::Trunc = nothing
     normalize::Bool = false
+    subalgorithm::Subalgorithm = SimpleBPGateUpdate()
 end
 
 function apply_operator!(
         algorithm::BPApplyGate, dest, operator, state, env;
-        vertices = operator_support(state, operator)
+        vertices = operator_support(state, operator), bondnames = nothing
     )
     apply_gate_bp!(
-        dest, operator, state, env; vertices, algorithm.trunc, algorithm.normalize
+        dest, operator, state, env; vertices, algorithm.trunc, algorithm.normalize,
+        algorithm.subalgorithm, bondnames
     )
     return dest
 end
@@ -499,44 +508,48 @@ end
 function apply_gate_bp_nsite!(
         ::Val{2}, dest::AbstractITensorNetwork, op::AbstractITensor,
         state::AbstractITensorNetwork, env, vertices;
-        trunc, normalize, bondnames = nothing
+        trunc, normalize, subalgorithm, bondnames = nothing
     )
     v1, v2 = vertices
-    Q_v1, R_v1, invsqrt_messages_v1 = bp_gate_factorize!(op, state, env, v1, v2)
-    Q_v2, R_v2, invsqrt_messages_v2 = bp_gate_factorize!(op, state, env, v2, v1)
+    Q_v1, R_v1, invsqrt_messages_v1, buffer_v1 =
+        bp_gate_factorize!(subalgorithm, op, state, env, v1, v2)
+    Q_v2, R_v2, invsqrt_messages_v2, buffer_v2 =
+        bp_gate_factorize!(subalgorithm, op, state, env, v2, v1)
     R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
-        op, R_v1, R_v2; trunc, normalize, bondnames
+        subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames
     )
-    dest[v1] = bp_gate_restore!(Q_v1, R_v1, invsqrt_messages_v1)
-    dest[v2] = bp_gate_restore!(Q_v2, R_v2, invsqrt_messages_v2)
+    dest[v1] = bp_gate_restore!(subalgorithm, Q_v1, R_v1, invsqrt_messages_v1, buffer_v1)
+    dest[v2] = bp_gate_restore!(subalgorithm, Q_v2, R_v2, invsqrt_messages_v2, buffer_v2)
     env[v1 => v2] = message_v1v2
     env[v2 => v1] = message_v2v1
     return dest
 end
 
 """
-    bp_gate_factorize!(op, state, env, v, w) -> (Q, R, invsqrt_messages)
+    bp_gate_factorize!(subalgorithm, op, state, env, v, w)
+        -> (Q, R, invsqrt_messages, buffer)
 
 Gauge `state[v]` by the square roots of the messages in `env` on every edge into `v`
 except `w => v`, and QR-factorize it so that `R` carries the bond to `w` and the names
 `state[v]` shares with `op`. `invsqrt_messages` are the inverse square roots that undo
 the gauge, for [`bp_gate_restore!`](@ref). The data of `state[v]` may be overwritten.
+`buffer` is memory for `bp_gate_restore!` to reuse, `nothing` for `SimpleBPGateUpdate`.
 
 `w` need not be a vertex of `state`: the bond is identified as the name `state[v]`
 shares with `env[w => v]`.
 """
-function bp_gate_factorize!(op::AbstractITensor, state, env, v, w)
+function bp_gate_factorize!(::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w)
     edges_in = [e for e in boundary_edges(env, [v]; dir = :in) if src(e) != w]
     roots = [sqrth_invsqrth_safe(project_hermitian(env[e])) for e in edges_in]
     sqrt_messages, invsqrt_messages = first.(roots), last.(roots)
     ψ = foldl((ψ, m) -> apply(m, ψ), sqrt_messages; init = state[v])
     bondname = only(intersect(names(state[v]), names(env[w => v])))
     Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
-    return Q, R, invsqrt_messages
+    return Q, R, invsqrt_messages, nothing
 end
 
 """
-    bp_gate_split(op, R_v1, R_v2; trunc, normalize, bondnames = nothing)
+    bp_gate_split(subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames = nothing)
         -> (R_v1, R_v2, message_v1v2, message_v2v1)
 
 Apply the two-site `op` to `R_v1 * R_v2`, truncate with `svd_trunc(...; trunc)`
@@ -549,8 +562,8 @@ messages' output name appears in neither factor. `bondnames = (input, output)` s
 these two names; by default they are the names `svd_trunc` mints.
 """
 function bp_gate_split(
-        op::AbstractITensor, R_v1::AbstractITensor, R_v2::AbstractITensor;
-        trunc, normalize, bondnames = nothing
+        ::SimpleBPGateUpdate, op::AbstractITensor, R_v1::AbstractITensor,
+        R_v2::AbstractITensor; trunc, normalize, bondnames = nothing
     )
     op_R_v1v2 = apply(op, R_v1 * R_v2)
     U_v1, S, U_v2 = svd_trunc(op_R_v1v2, setdiff(names(R_v1), names(R_v2)); trunc)
@@ -579,11 +592,14 @@ function bp_gate_split(
 end
 
 """
-    bp_gate_restore!(Q, R, invsqrt_messages)
+    bp_gate_restore!(subalgorithm, Q, R, invsqrt_messages, buffer)
 
 The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize!`](@ref) undone by
-applying `invsqrt_messages`. The data of `Q` may be overwritten.
+applying `invsqrt_messages`. The data of `Q` and `buffer` may be overwritten.
 """
-function bp_gate_restore!(Q::AbstractITensor, R::AbstractITensor, invsqrt_messages)
+function bp_gate_restore!(
+        ::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor, invsqrt_messages,
+        buffer
+    )
     return foldl((ψ, m) -> apply(m, ψ), invsqrt_messages; init = Q * R)
 end
