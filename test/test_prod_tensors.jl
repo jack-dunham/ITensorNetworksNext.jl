@@ -1,15 +1,15 @@
 using Adapt: adapt
 using Graphs: edges, src, vertices
-using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, operator,
-    outputnames, state, unnamed
-using ITensorNetworksNext: Greedy, ITensorNetwork, NormNetwork, Sliced, beliefpropagation,
-    conj_bratensor, incoming_messages, kettensor, linkinds, message_environment,
-    prod_tensors, siteinds, tensornetwork
+using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, name, operator,
+    outputnames, setname, state, uniquename, unnamed
+using ITensorNetworksNext: Greedy, ITensorNetwork, NormNetwork, Sliced, absorb_matrices!,
+    beliefpropagation, conj_bratensor, incoming_messages, kettensor, linkinds,
+    message_environment, prod_tensors, siteinds, tensornetwork
 using JLArrays: JLArray
 using NamedGraphs: NamedEdge, incident_edges, named_grid
 using OMEinsumContractionOrders: ExhaustiveSearch, GreedyMethod, TreeSA
-using TensorAlgebra: TensorOperationsContract
-using TensorOperations: TensorOperations
+using TensorAlgebra: MatricizeContract, TensorOperationsContract
+using TensorOperations: TensorOperations as TO
 using Test: @test, @testset
 
 # Records the arrays it allocates as temporaries and the arrays it is asked to free.
@@ -17,12 +17,12 @@ struct RecordingAllocator
     temporaries::Vector{Any}
     freed::Vector{Any}
 end
-function TensorOperations.tensoralloc(ttype, structure, ::Val{true}, a::RecordingAllocator)
-    C = TensorOperations.tensoralloc(ttype, structure, Val(true))
+function TO.tensoralloc(ttype, structure, ::Val{true}, a::RecordingAllocator)
+    C = TO.tensoralloc(ttype, structure, Val(true))
     push!(a.temporaries, C)
     return C
 end
-function TensorOperations.tensorfree!(C, a::RecordingAllocator)
+function TO.tensorfree!(C, a::RecordingAllocator)
     push!(a.freed, C)
     return nothing
 end
@@ -145,5 +145,24 @@ end
         @test all(
             a -> any(f -> pointer(f) == pointer(a), allocator.freed), allocator.temporaries
         )
+    end
+
+    @testset "absorb_matrices! matches * ($alg)" for alg in (
+            MatricizeContract(), TensorOperationsContract(),
+            TensorOperationsContract(; allocator = TO.BufferAllocator()),
+        )
+        legs = Index.((2, 3, 4))
+        matrix(elt, i) = randn(elt, (setname(i, uniquename(name(i))), i))
+        for n in 0:3
+            ψ = randn(legs)
+            matrices = [matrix(Float64, legs[k]) for k in 1:n]
+            expected = foldl(*, matrices; init = copy(ψ))
+            @test absorb_matrices!(alg, ψ, matrices...) ≈ expected
+        end
+        # A wider element type or a non-square matrix takes the allocating method.
+        ψ, m = randn(legs), matrix(ComplexF64, legs[1])
+        @test absorb_matrices!(alg, copy(ψ), m) ≈ ψ * m
+        ψ, m = randn(legs), randn((Index(5), legs[1]))
+        @test absorb_matrices!(alg, copy(ψ), m) ≈ ψ * m
     end
 end

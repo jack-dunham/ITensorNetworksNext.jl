@@ -52,6 +52,14 @@ function prod_tensors!(alg, y, x, xs...; conjlist = falses(length(xs) + 1))
     return mulopadd!(y, opx, x, op(length(xs) + 1), last(xs), true, false; alg)
 end
 
+"""
+    absorb_matrices!(alg, t, matrices...) -> t * matrices[1] * matrices[2] * …
+
+Contract each matrix into `t` in turn. `t` may be overwritten: a method for `alg` can reuse
+its memory.
+"""
+absorb_matrices!(_alg, t, matrices...) = foldl(*, matrices; init = t)
+
 # The tree that folds `labels` from the left, so `(a, b, c)` gives `((a, b), c)`.
 function left_associative_tree(labels)
     isempty(labels) && throw(ArgumentError("No tensors to contract."))
