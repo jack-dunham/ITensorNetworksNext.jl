@@ -1,15 +1,15 @@
 using .AlgorithmsInterfaceExtensions: AlgorithmsInterfaceExtensions as AIE
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using Base: @kwdef
-using Graphs: dst, src, vertices
+using Graphs: Graphs, dst, src, vertices
 using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTensor,
-    NamedTensorOperator, apply, inputinds, inputnames, name, names, operator, outputinds,
-    rename, sim, state, uniquename, unnamed
+    NamedTensorOperator, apply, dim, inputinds, inputnames, mulopadd!, name, names,
+    nametype, operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
-using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, svd_trunc
+using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, qr_compact!, svd_trunc
 using NamedGraphs: boundary_edges, vertextype
 using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_invsqrth_safe, sqrth_safe
-using TensorAlgebra: isdual, matricize, twist!, unmatricize
+using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
 
 # Asymmetric (Gram) root of a Hermitian positive semidefinite matrix, as the pair
 # `(root, inv_root)`: `root' * root == m`, and `inv_root * root` is the identity on `m`'s
@@ -65,7 +65,7 @@ tensors) and `normalize`.
 on. By default each list is the operator's [`operator_support`](@ref) in `state`, and an
 `ArgumentError` is thrown if an input name of an operator is on no tensor of `state`.
 
-See also [`apply_operator`](@ref).
+See also [`apply_operator`](@ref), [`apply_operators!`](@ref).
 """
 function apply_operators(
         operators, state, env; alg = nothing, vertices = nothing, kwargs...
@@ -74,6 +74,22 @@ function apply_operators(
         apply_operators, alg, (operators, state, env); kwargs...
     )
     return apply_operators(algorithm, operators, state, env; vertices)
+end
+
+"""
+    apply_operators!(operators, state, env; alg=nothing, vertices=nothing, kwargs...)
+        -> (state, env)
+
+[`apply_operators`](@ref) without copying: the tensors of `state` are overwritten and `env`
+is updated in place, so `state` must not be used afterwards except through the result.
+"""
+function apply_operators!(
+        operators, state, env; alg = nothing, vertices = nothing, kwargs...
+    )
+    algorithm = select_algorithm(
+        apply_operators, alg, (operators, state, env); kwargs...
+    )
+    return apply_operators!(algorithm, operators, state, env; vertices)
 end
 
 # The `apply_operators` iteration algorithm wraps the per-operator algorithm,
@@ -103,7 +119,15 @@ function default_algorithm(
 end
 
 function apply_operators(algorithm, operators, state, env; vertices = nothing)
-    isempty(operators) && return copy(state), copy(env)
+    dest = copy(state)
+    for v in Graphs.vertices(dest)
+        dest[v] = copy(dest[v])
+    end
+    return apply_operators!(algorithm, operators, dest, copy(env); vertices)
+end
+
+function apply_operators!(algorithm, operators, state, env; vertices = nothing)
+    isempty(operators) && return state, env
     if isnothing(vertices)
         vertices = map(operators) do op
             for name in inputnames(op)
@@ -178,9 +202,9 @@ function AI.step!(
     state.iterate, state.env = apply_operator_environment_preparation(
         algorithm.environment_algorithm, problem, algorithm, state
     )
-    state.iterate, state.env = apply_operator(
-        algorithm.operator_algorithm, problem.operators[state.iteration], state.iterate,
-        state.env; vertices = problem.vertices[state.iteration]
+    apply_operator!(
+        algorithm.operator_algorithm, state.iterate, problem.operators[state.iteration],
+        state.iterate, state.env; vertices = problem.vertices[state.iteration]
     )
     return state
 end
@@ -392,9 +416,15 @@ function apply_operator(operator, state, env; alg = nothing, kwargs...)
     return apply_operator(algorithm, operator, state, env)
 end
 
-function apply_operator(algorithm::ApplyOperatorAlgorithm, operator, state, env; kwargs...)
+function apply_operator(
+        algorithm::ApplyOperatorAlgorithm, operator, state, env;
+        vertices = operator_support(state, operator), kwargs...
+    )
     dest, env_dest = initialize_output(apply_operator!, algorithm, operator, state, env)
-    apply_operator!(algorithm, dest, operator, state, env_dest; kwargs...)
+    for v in vertices
+        dest[v] = copy(dest[v])
+    end
+    apply_operator!(algorithm, dest, operator, dest, env_dest; vertices, kwargs...)
     return dest, env_dest
 end
 
@@ -472,30 +502,30 @@ function apply_gate_bp_nsite!(
         trunc, normalize, bondnames = nothing
     )
     v1, v2 = vertices
-    Q_v1, R_v1, invsqrt_messages_v1 = bp_gate_factorize(op, state, env, v1, v2)
-    Q_v2, R_v2, invsqrt_messages_v2 = bp_gate_factorize(op, state, env, v2, v1)
+    Q_v1, R_v1, invsqrt_messages_v1 = bp_gate_factorize!(op, state, env, v1, v2)
+    Q_v2, R_v2, invsqrt_messages_v2 = bp_gate_factorize!(op, state, env, v2, v1)
     R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
         op, R_v1, R_v2; trunc, normalize, bondnames
     )
-    dest[v1] = bp_gate_restore(Q_v1, R_v1, invsqrt_messages_v1)
-    dest[v2] = bp_gate_restore(Q_v2, R_v2, invsqrt_messages_v2)
+    dest[v1] = bp_gate_restore!(Q_v1, R_v1, invsqrt_messages_v1)
+    dest[v2] = bp_gate_restore!(Q_v2, R_v2, invsqrt_messages_v2)
     env[v1 => v2] = message_v1v2
     env[v2 => v1] = message_v2v1
     return dest
 end
 
 """
-    bp_gate_factorize(op, state, env, v, w) -> (Q, R, invsqrt_messages)
+    bp_gate_factorize!(op, state, env, v, w) -> (Q, R, invsqrt_messages)
 
 Gauge `state[v]` by the square roots of the messages in `env` on every edge into `v`
 except `w => v`, and QR-factorize it so that `R` carries the bond to `w` and the names
 `state[v]` shares with `op`. `invsqrt_messages` are the inverse square roots that undo
-the gauge, for [`bp_gate_restore`](@ref).
+the gauge, for [`bp_gate_restore!`](@ref). The data of `state[v]` may be overwritten.
 
 `w` need not be a vertex of `state`: the bond is identified as the name `state[v]`
 shares with `env[w => v]`.
 """
-function bp_gate_factorize(op::AbstractITensor, state, env, v, w)
+function bp_gate_factorize!(op::AbstractITensor, state, env, v, w)
     edges_in = [e for e in boundary_edges(env, [v]; dir = :in) if src(e) != w]
     roots = [sqrth_invsqrth_safe(project_hermitian(env[e])) for e in edges_in]
     sqrt_messages, invsqrt_messages = first.(roots), last.(roots)
@@ -549,11 +579,11 @@ function bp_gate_split(
 end
 
 """
-    bp_gate_restore(Q, R, invsqrt_messages)
+    bp_gate_restore!(Q, R, invsqrt_messages)
 
-The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize`](@ref) undone by
-applying `invsqrt_messages`.
+The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize!`](@ref) undone by
+applying `invsqrt_messages`. The data of `Q` may be overwritten.
 """
-function bp_gate_restore(Q::AbstractITensor, R::AbstractITensor, invsqrt_messages)
+function bp_gate_restore!(Q::AbstractITensor, R::AbstractITensor, invsqrt_messages)
     return foldl((ψ, m) -> apply(m, ψ), invsqrt_messages; init = Q * R)
 end

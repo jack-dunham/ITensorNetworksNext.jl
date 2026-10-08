@@ -5,11 +5,12 @@ using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, ou
     setname, uniquename
 using ITensorNetworksNext: ITensorNetworksNext, BeliefPropagationEnvironmentPreparation,
     MessageUpdateAlgorithm, NormNetwork, SimpleMessageUpdate, StopWhenVertexRevisited,
-    apply_operator, apply_operators, beliefpropagation, bp_gate_factorize, bp_gate_restore,
-    bp_gate_split, insertlink!, message_environment, message_normnetwork, tensornetwork
+    apply_operator, apply_operators, apply_operators!,
+    beliefpropagation, bp_gate_factorize!, bp_gate_restore!, bp_gate_split, insertlink!,
+    message_environment, message_normnetwork, tensornetwork
 using LinearAlgebra: norm
 using MatrixAlgebraKit: svd_trunc, truncrank
-using NamedGraphs: named_cycle_graph, named_path_graph
+using NamedGraphs: named_cycle_graph, named_grid, named_path_graph
 using Random: AbstractRNG
 using StableRNGs: StableRNG
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
@@ -145,8 +146,10 @@ end
         network, env = random_state(rng, T, g, site_axes; nlayers = 2, trunc = truncrank(4))
 
         gate = randn_operator(rng, T, (site_axes[2], site_axes[3]))
-        Q_2, R_2, invsqrt_2 = bp_gate_factorize(gate, network, env, 2, 3)
-        Q_3, R_3, invsqrt_3 = bp_gate_factorize(gate, network, env, 3, 2)
+        gated = copy(network)
+        gated[2], gated[3] = copy(network[2]), copy(network[3])
+        Q_2, R_2, invsqrt_2 = bp_gate_factorize!(gate, gated, env, 2, 3)
+        Q_3, R_3, invsqrt_3 = bp_gate_factorize!(gate, gated, env, 3, 2)
         bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
         R_2, R_3, message_23, message_32 =
             bp_gate_split(gate, R_2, R_3; trunc = nothing, normalize = false, bondnames)
@@ -155,9 +158,8 @@ end
             @test only(inputnames(message)) == bondnames[1]
             @test only(outputnames(message)) == bondnames[2]
         end
-        gated = copy(network)
-        gated[2] = bp_gate_restore(Q_2, R_2, invsqrt_2)
-        gated[3] = bp_gate_restore(Q_3, R_3, invsqrt_3)
+        gated[2] = bp_gate_restore!(Q_2, R_2, invsqrt_2)
+        gated[3] = bp_gate_restore!(Q_3, R_3, invsqrt_3)
         @test prod(gated) ≈ apply(gate, prod(network)) rtol = eps(real(T))^(1 / 3)
     end
 
@@ -172,6 +174,39 @@ end
             sqrt_message, invsqrt_message = sqrth_invsqrth_safe(env[edge])
             @test apply(invsqrt_message, apply(sqrt_message, network[v])) ≈ network[v] rtol =
                 rtol
+        end
+    end
+end
+
+@testset "apply_operators! and input preservation (T=$T)" for T in
+    (Float32, Float64, ComplexF64)
+    rng = StableRNG(123)
+    g = named_grid((2, 3))
+    site_axes = Dict(v => Index(spinone) for v in vertices(g))
+    network, env = random_state(rng, T, g, site_axes; nlayers = 2, trunc = truncrank(4))
+    gates = [
+        randn_operator(rng, T, (site_axes[(1, 2)], site_axes[(2, 2)])),
+        randn_operator(rng, T, (site_axes[(1, 2)],)),
+        randn_operator(rng, T, (site_axes[(2, 2)], site_axes[(1, 2)])),
+        randn_operator(rng, T, (site_axes[(1, 1)], site_axes[(1, 2)])),
+    ]
+    snapshot = Dict(v => copy(network[v]) for v in vertices(g))
+    rtol = eps(real(T))^(1 / 3)
+
+    @testset "apply_operators leaves its input unchanged" begin
+        apply_operators(gates, network, env; trunc = truncrank(2))
+        @test all(v -> network[v] == snapshot[v], vertices(g))
+        apply_operator(gates[1], network, env; trunc = truncrank(2))
+        @test all(v -> network[v] == snapshot[v], vertices(g))
+    end
+
+    @testset "apply_operators! matches apply_operators" begin
+        gated, gated_env = apply_operators(gates, network, env; trunc = truncrank(2))
+        inplace, inplace_env = apply_operators!(gates, network, env; trunc = truncrank(2))
+        # The two runs mint different bond names, so compare name-independent quantities.
+        @test prod(inplace) ≈ prod(gated) rtol = rtol
+        for edge in edges(gated_env)
+            @test norm(inplace_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
         end
     end
 end
