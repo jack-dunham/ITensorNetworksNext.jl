@@ -3,7 +3,7 @@ using .AlgorithmsInterfaceExtensions:
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using DataGraphs: edge_data
 using Graphs: AbstractEdge, edges, edgetype, has_edge, vertices
-using ITensorBase: AbstractITensor, operator, state
+using ITensorBase: AbstractITensor, inputnames, operator, outputnames, state
 using LinearAlgebra: norm, normalize, tr
 using NamedGraphs: forest_cover_edge_sequence, subgraph
 
@@ -64,15 +64,27 @@ an explicit `AlgorithmsInterface.StoppingCriterion`.
 `message_update_algorithm` controls how a single message is recomputed
 from its incoming neighbours.
 """
-function beliefpropagation(
-        factors, messages;
+function beliefpropagation(factors, messages; kwargs...)
+    problem = BeliefPropagationProblem(factors)
+    cache = MessageCache(messages)
+    algorithm = beliefpropagation_algorithm(factors, cache; kwargs...)
+    return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
+end
+
+"""
+    beliefpropagation_algorithm(
+        factors, cache; edges, stopping_criterion, message_update_algorithm
+    ) -> BeliefPropagationAlgorithm
+
+The algorithm [`beliefpropagation`](@ref) runs on `factors` and the `MessageCache` `cache`,
+built from the same keyword arguments.
+"""
+function beliefpropagation_algorithm(
+        factors, cache;
         edges = default_beliefpropagation_edges(factors),
         stopping_criterion = nothing,
         message_update_algorithm = nothing
     )
-    problem = BeliefPropagationProblem(factors)
-    cache = MessageCache(messages)
-
     # No concrete `edge` value here, so the args tuple uses `edgetype(factors)`.
     message_update_algorithm = select_algorithm(
         message_update!,
@@ -84,9 +96,7 @@ function beliefpropagation(
         stopping_criterion = AI.StopAfterIteration(length(edges))
     )
     stopping_criterion = select_beliefpropagation_stopping_criterion(stopping_criterion)
-    algorithm = BeliefPropagationAlgorithm(; edges, subalgorithm, stopping_criterion)
-
-    return AI.solve(problem, algorithm; iterate = cache) # -> typeof(cache)
+    return BeliefPropagationAlgorithm(; edges, subalgorithm, stopping_criterion)
 end
 
 # === Layer 1: BP outer loop (iterative) ===
@@ -278,9 +288,7 @@ end
 # the message is positive semidefinite and its trace is a positive normalization.
 function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
     new_tensor = updated_message(algorithm, cache, factors, edge)
-    branames = linknames(branetwork(factors), edge)
-    ketnames = linknames(ketnetwork(factors), edge)
-    new_message = operator(new_tensor, branames, ketnames)
+    new_message = operator(new_tensor, outputnames(cache[edge]), inputnames(cache[edge]))
     if algorithm.normalize
         message_norm = tr(new_message)
         iszero(message_norm) || (new_message /= message_norm)

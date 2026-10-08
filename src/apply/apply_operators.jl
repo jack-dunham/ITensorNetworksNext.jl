@@ -1,15 +1,15 @@
 using .AlgorithmsInterfaceExtensions: AlgorithmsInterfaceExtensions as AIE
 using AlgorithmsInterface: AlgorithmsInterface as AI
 using Base: @kwdef
-using Graphs: dst, src, vertices
+using Graphs: Graphs, dst, src, vertices
 using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTensor,
-    NamedTensorOperator, apply, inputinds, inputnames, name, names, operator, outputinds,
-    rename, sim, state, uniquename, unnamed
+    NamedTensorOperator, apply, inputinds, inputnames, mulopadd!, name, names,
+    nametype, operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
-using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, svd_trunc
-using NamedGraphs: boundary_edges
+using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, qr_compact!, svd_trunc
+using NamedGraphs: boundary_edges, vertextype
 using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_safe
-using TensorAlgebra: isdual, matricize, twist!, unmatricize
+using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
 
 # Asymmetric (Gram) root of a Hermitian positive semidefinite matrix, as the pair
 # `(root, inv_root)`: `root' * root == m`, and `inv_root * root` is the identity on `m`'s
@@ -48,7 +48,8 @@ end
 # === Top-level user entry point ===
 
 """
-    apply_operators(operators, state, env; alg=nothing, kwargs...) -> (state, env)
+    apply_operators(operators, state, env; alg=nothing, vertices=nothing, kwargs...)
+        -> (state, env)
 
 Apply each operator in `operators` (a sequence of single-tensor or two-tensor
 operators) to `state` in turn, updating `env` to reflect each application.
@@ -60,13 +61,35 @@ the operators applied. `kwargs` are forwarded to the per-operator algorithm
 (forwarded to the SVD that splits a two-site gate back into single-site
 tensors) and `normalize`.
 
-See also [`apply_operator`](@ref).
+`vertices` holds one vertex list per operator, the vertices of `state` that operator acts
+on. By default each list is the operator's [`operator_support`](@ref) in `state`, and an
+`ArgumentError` is thrown if an input name of an operator is on no tensor of `state`.
+
+See also [`apply_operator`](@ref), [`apply_operators!`](@ref).
 """
-function apply_operators(operators, state, env; alg = nothing, kwargs...)
+function apply_operators(
+        operators, state, env; alg = nothing, vertices = nothing, kwargs...
+    )
     algorithm = select_algorithm(
         apply_operators, alg, (operators, state, env); kwargs...
     )
-    return apply_operators(algorithm, operators, state, env)
+    return apply_operators(algorithm, operators, state, env; vertices)
+end
+
+"""
+    apply_operators!(operators, state, env; alg=nothing, vertices=nothing, kwargs...)
+        -> (state, env)
+
+[`apply_operators`](@ref) without copying: the tensors of `state` are overwritten and `env`
+is updated in place, so `state` must not be used afterwards except through the result.
+"""
+function apply_operators!(
+        operators, state, env; alg = nothing, vertices = nothing, kwargs...
+    )
+    algorithm = select_algorithm(
+        apply_operators, alg, (operators, state, env); kwargs...
+    )
+    return apply_operators!(algorithm, operators, state, env; vertices)
 end
 
 # The `apply_operators` iteration algorithm wraps the per-operator algorithm,
@@ -95,16 +118,43 @@ function default_algorithm(
     )
 end
 
-function apply_operators(algorithm, operators, state, env)
-    isempty(operators) && return copy(state), copy(env)
-    problem = ApplyOperatorsProblem(; operators, init = state)
+function apply_operators(algorithm, operators, state, env; vertices = nothing)
+    dest = copy(state)
+    for v in Graphs.vertices(dest)
+        dest[v] = copy(dest[v])
+    end
+    return apply_operators!(algorithm, operators, dest, copy(env); vertices)
+end
+
+function apply_operators!(algorithm, operators, state, env; vertices = nothing)
+    isempty(operators) && return state, env
+    if isnothing(vertices)
+        vertices = map(operators) do op
+            for name in inputnames(op)
+                has_dimname(state, name) || throw(
+                    ArgumentError(
+                        "operator input `$name` is not on any tensor of the network"
+                    )
+                )
+            end
+            return operator_support(state, op)
+        end
+    elseif length(vertices) != length(operators)
+        throw(
+            ArgumentError(
+                "got $(length(vertices)) vertex lists for $(length(operators)) operators"
+            )
+        )
+    end
+    problem = ApplyOperatorsProblem(; operators, vertices, init = state)
     return AI.solve(problem, algorithm; iterate = state, env)
 end
 
 # === Layer 1: apply_operators iteration ===
 
-@kwdef struct ApplyOperatorsProblem{Ops, Init} <: AI.Problem
+@kwdef struct ApplyOperatorsProblem{Ops, Vertices, Init} <: AI.Problem
     operators::Ops
+    vertices::Vertices
     init::Init
 end
 
@@ -119,12 +169,13 @@ end
 end
 
 @kwdef mutable struct ApplyOperatorsState{
-        Iterate, Env, StoppingCriterionState <: AI.StoppingCriterionState,
+        Iterate, Env, StoppingCriterionState <: AI.StoppingCriterionState, EnvironmentState,
     } <: AI.State
     iterate::Iterate
     env::Env
     iteration::Int = 0
     stopping_criterion_state::StoppingCriterionState
+    environment_state::EnvironmentState
 end
 
 function AI.initialize_state(
@@ -134,8 +185,11 @@ function AI.initialize_state(
     stopping_criterion_state = AI.initialize_state(
         problem, algorithm, algorithm.stopping_criterion; iterate
     )
+    environment_state = initialize_environment_state(
+        algorithm.environment_algorithm, problem, algorithm; iterate
+    )
     return ApplyOperatorsState(;
-        iterate, env, iteration, stopping_criterion_state
+        iterate, env, iteration, stopping_criterion_state, environment_state
     )
 end
 
@@ -146,12 +200,11 @@ function AI.step!(
     # Prepare for the operator application, for example by updating the
     # environments in a path between where the operators are being applied.
     state.iterate, state.env = apply_operator_environment_preparation(
-        algorithm.environment_algorithm, algorithm.operator_algorithm,
-        problem.operators, state.iteration, state.iterate, state.env
+        algorithm.environment_algorithm, problem, algorithm, state
     )
-    state.iterate, state.env = apply_operator(
-        algorithm.operator_algorithm, problem.operators[state.iteration], state.iterate,
-        state.env
+    apply_operator!(
+        algorithm.operator_algorithm, state.iterate, problem.operators[state.iteration],
+        state.iterate, state.env; vertices = problem.vertices[state.iteration]
     )
     return state
 end
@@ -172,10 +225,15 @@ end
 struct NoApplyOperatorEnvironmentPreparation <: AbstractAlgorithm end
 
 function apply_operator_environment_preparation(
-        ::NoApplyOperatorEnvironmentPreparation, operator_algorithm, operators, iteration,
-        iterate, env
+        ::NoApplyOperatorEnvironmentPreparation, problem, algorithm, state
     )
-    return iterate, env
+    return state.iterate, state.env
+end
+
+function initialize_environment_state(
+        ::NoApplyOperatorEnvironmentPreparation, problem, algorithm; iterate
+    )
+    return nothing
 end
 
 function default_algorithm(
@@ -183,6 +241,158 @@ function default_algorithm(
     )
     return NoApplyOperatorEnvironmentPreparation()
 end
+
+"""
+    BeliefPropagationEnvironmentPreparation(; when = StopWhenVertexRevisited(), algorithm)
+    BeliefPropagationEnvironmentPreparation(network, env; when, kwargs...)
+
+Environment preparation that runs the belief propagation `algorithm` on the environment
+before a gate whenever the stopping criterion `when` is met, counting only the gates
+applied since belief propagation last ran. The second form builds `algorithm` with
+[`beliefpropagation_algorithm`](@ref) from `kwargs`, which must include its
+`stopping_criterion`; `apply_operators(...; environment_alg = (; when, kwargs...))` uses it.
+"""
+struct BeliefPropagationEnvironmentPreparation{
+        When <: AI.StoppingCriterion, Algorithm <: BeliefPropagationAlgorithm,
+    } <: AbstractAlgorithm
+    when::When
+    algorithm::Algorithm
+end
+function BeliefPropagationEnvironmentPreparation(;
+        when = StopWhenVertexRevisited(), algorithm
+    )
+    return BeliefPropagationEnvironmentPreparation(when, algorithm)
+end
+function BeliefPropagationEnvironmentPreparation(
+        network, env; when = StopWhenVertexRevisited(), kwargs...
+    )
+    factors = NormNetwork(network, branamemap(env))
+    algorithm = beliefpropagation_algorithm(factors, MessageCache(env); kwargs...)
+    return BeliefPropagationEnvironmentPreparation(when, algorithm)
+end
+
+# Keyword arguments, from an `environment_alg` `NamedTuple`, select belief propagation.
+function default_algorithm(
+        ::typeof(apply_operator_environment_preparation), args::Tuple; kwargs...
+    )
+    isempty(kwargs) && return NoApplyOperatorEnvironmentPreparation()
+    _, _, _, network, env = args
+    return BeliefPropagationEnvironmentPreparation(network, env; kwargs...)
+end
+
+# `iteration` counts the gates applied since belief propagation last ran;
+# `operator_index` is the index in `problem.operators` of the next gate.
+@kwdef mutable struct BeliefPropagationEnvironmentPreparationState{
+        Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
+    } <: AI.State
+    iterate::Iterate
+    iteration::Int = 0
+    operator_index::Int = 0
+    stopping_criterion_state::StoppingCriterionState
+end
+
+function initialize_environment_state(
+        environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm;
+        iterate
+    )
+    stopping_criterion_state = AI.initialize_state(
+        problem, algorithm, environment_algorithm.when; iterate
+    )
+    return BeliefPropagationEnvironmentPreparationState(; iterate, stopping_criterion_state)
+end
+
+function apply_operator_environment_preparation(
+        environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
+        state
+    )
+    environment_state = state.environment_state
+    environment_state.iterate = state.iterate
+    environment_state.operator_index = state.iteration
+    when = environment_algorithm.when
+    if AI.is_finished!(
+            problem, algorithm, environment_state, when,
+            environment_state.stopping_criterion_state
+        )
+        state.env = update_environment(
+            environment_algorithm, problem, algorithm, state
+        )
+        environment_state.iteration = 0
+        AI.initialize_state!(
+            problem, algorithm, when, environment_state.stopping_criterion_state
+        )
+    end
+    environment_state.iteration += 1
+    return state.iterate, state.env
+end
+
+"""
+    update_environment(environment_algorithm, problem, algorithm, state) -> env
+
+`state.env` brought up to date before the next operator, called when the criterion of
+`environment_algorithm` is met. For [`BeliefPropagationEnvironmentPreparation`](@ref), runs
+belief propagation on the norm network of `state.iterate`.
+"""
+function update_environment(
+        environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
+        state
+    )
+    bp_problem = BeliefPropagationProblem(NormNetwork(state.iterate, branamemap(state.env)))
+    return AI.solve(
+        bp_problem, environment_algorithm.algorithm; iterate = MessageCache(state.env)
+    )
+end
+
+"""
+    StopWhenVertexRevisited()
+
+Stopping criterion for [`BeliefPropagationEnvironmentPreparation`](@ref), met when the next
+operator acts on two vertices and one of them was updated since belief propagation last
+ran. The vertices of each operator are read from the problem's `vertices`.
+"""
+struct StopWhenVertexRevisited <: AI.StoppingCriterion end
+
+struct StopWhenVertexRevisitedState{V} <: AI.StoppingCriterionState
+    updated::Set{V}
+end
+
+function AI.initialize_state(
+        ::AI.Problem, ::AI.Algorithm, ::StopWhenVertexRevisited; iterate
+    )
+    return StopWhenVertexRevisitedState(Set{vertextype(iterate)}())
+end
+
+function AI.initialize_state!(
+        ::AI.Problem, ::AI.Algorithm, ::StopWhenVertexRevisited,
+        st::StopWhenVertexRevisitedState
+    )
+    empty!(st.updated)
+    return st
+end
+
+function AI.is_finished(
+        problem::ApplyOperatorsProblem, algorithm::ApplyOperatorsAlgorithm,
+        state::BeliefPropagationEnvironmentPreparationState, ::StopWhenVertexRevisited,
+        st::StopWhenVertexRevisitedState
+    )
+    vertices = problem.vertices[state.operator_index]
+    return length(vertices) == 2 && any(in(st.updated), vertices)
+end
+
+# Records the vertices of the previous gate before checking the next one, so the gate
+# applied right after belief propagation runs is recorded even though the state was reset.
+function AI.is_finished!(
+        problem::ApplyOperatorsProblem, algorithm::ApplyOperatorsAlgorithm,
+        state::BeliefPropagationEnvironmentPreparationState, c::StopWhenVertexRevisited,
+        st::StopWhenVertexRevisitedState
+    )
+    if state.iteration > 0
+        union!(st.updated, problem.vertices[state.operator_index - 1])
+    end
+    return AI.is_finished(problem, algorithm, state, c, st)
+end
+
+AI.indicates_convergence(::StopWhenVertexRevisited) = false
+AI.get_reason(::StopWhenVertexRevisited, ::StopWhenVertexRevisitedState) = nothing
 
 # === Layer 3: single-operator strategy ===
 
@@ -206,25 +416,40 @@ function apply_operator(operator, state, env; alg = nothing, kwargs...)
     return apply_operator(algorithm, operator, state, env)
 end
 
-function apply_operator(algorithm::ApplyOperatorAlgorithm, operator, state, env)
+function apply_operator(
+        algorithm::ApplyOperatorAlgorithm, operator, state, env;
+        vertices = operator_support(state, operator), kwargs...
+    )
     dest, env_dest = initialize_output(apply_operator!, algorithm, operator, state, env)
-    apply_operator!(algorithm, dest, operator, state, env_dest)
+    for v in vertices
+        dest[v] = copy(dest[v])
+    end
+    apply_operator!(algorithm, dest, operator, dest, env_dest; vertices, kwargs...)
     return dest, env_dest
 end
 
 # === Default strategy: BPApplyGate ===
 
-@kwdef struct BPApplyGate{Trunc} <: ApplyOperatorAlgorithm
+"""
+    SimpleBPGateUpdate()
+
+The gate stages of [`BPApplyGate`](@ref) that allocate a new tensor at every step.
+"""
+struct SimpleBPGateUpdate end
+
+@kwdef struct BPApplyGate{Trunc, Subalgorithm} <: ApplyOperatorAlgorithm
     trunc::Trunc = nothing
     normalize::Bool = false
+    subalgorithm::Subalgorithm = SimpleBPGateUpdate()
 end
 
 function apply_operator!(
-        algorithm::BPApplyGate, dest, operator, state, env
+        algorithm::BPApplyGate, dest, operator, state, env;
+        vertices = operator_support(state, operator), bondnames = nothing
     )
     apply_gate_bp!(
-        dest, operator, state, env;
-        algorithm.trunc, algorithm.normalize
+        dest, operator, state, env; vertices, algorithm.trunc, algorithm.normalize,
+        algorithm.subalgorithm, bondnames
     )
     return dest
 end
@@ -243,10 +468,9 @@ end
 
 function apply_gate_bp!(
         dest::AbstractITensorNetwork, op::AbstractITensor,
-        state::AbstractITensorNetwork, env; kwargs...
+        state::AbstractITensorNetwork, env;
+        vertices = operator_support(state, op), kwargs...
     )
-    vertices = operator_support(state, op)
-
     isempty(vertices) && throw(
         ArgumentError("operator shares no indices with the tensor network")
     )
@@ -273,7 +497,7 @@ function apply_gate_bp_nsite!(
     if normalize
         sqrt_messages = [
             sqrth_safe(project_hermitian(env[e])) for
-                e in boundary_edges(state, vertices; dir = :in)
+                e in boundary_edges(env, vertices; dir = :in)
         ]
         ψv /= norm(foldl((ψ, m) -> apply(m, ψ), sqrt_messages; init = ψv))
     end
@@ -284,38 +508,96 @@ end
 function apply_gate_bp_nsite!(
         ::Val{2}, dest::AbstractITensorNetwork, op::AbstractITensor,
         state::AbstractITensorNetwork, env, vertices;
-        trunc, normalize
+        trunc, normalize, subalgorithm, bondnames = nothing
     )
     v1, v2 = vertices
-    edges_in = boundary_edges(state, vertices; dir = :in)
-    roots_v1 =
-        [message_gauge(env[e]) for e in edges_in if dst(e) == v1]
-    roots_v2 =
-        [message_gauge(env[e]) for e in edges_in if dst(e) == v2]
+    Q_v1, R_v1, inverse_roots_v1 = bp_gate_factorize!(subalgorithm, op, state, env, v1, v2)
+    Q_v2, R_v2, inverse_roots_v2 = bp_gate_factorize!(subalgorithm, op, state, env, v2, v1)
+    R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
+        subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames
+    )
+    dest[v1] = bp_gate_restore!(subalgorithm, Q_v1, R_v1, inverse_roots_v1)
+    dest[v2] = bp_gate_restore!(subalgorithm, Q_v2, R_v2, inverse_roots_v2)
+    env[v1 => v2] = message_v1v2
+    env[v2 => v1] = message_v2v1
+    return dest
+end
 
-    ψ_v1 = foldl((ψ, (x, _)) -> x * ψ, roots_v1; init = state[v1])
-    ψ_v2 = foldl((ψ, (x, _)) -> x * ψ, roots_v2; init = state[v2])
+"""
+    bp_gate_factorize!(subalgorithm, op, state, env, v, w) -> (Q, R, inverse_roots)
 
-    Q_v1, R_v1 = qr_compact(ψ_v1, setdiff(names(ψ_v1), names(ψ_v2), names(op)))
-    Q_v2, R_v2 = qr_compact(ψ_v2, setdiff(names(ψ_v2), names(ψ_v1), names(op)))
+Gauge `state[v]` by the `message_gauge` roots of the messages in `env` on every edge into
+`v` except `w => v`, and QR-factorize it so that `R` carries the bond to `w` and the names
+`state[v]` shares with `op`. `inverse_roots` undo the gauge, for [`bp_gate_restore!`](@ref).
+The data of `state[v]` may be overwritten.
+
+`w` need not be a vertex of `state`: the bond is identified as the name `state[v]`
+shares with `env[w => v]`.
+"""
+function bp_gate_factorize!(::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w)
+    edges_in = [e for e in boundary_edges(env, [v]; dir = :in) if src(e) != w]
+    roots = [message_gauge(env[e]) for e in edges_in]
+    ψ = foldl((ψ, (x, _)) -> x * ψ, roots; init = state[v])
+    bondname = only(intersect(names(state[v]), names(env[w => v])))
+    Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
+    return Q, R, last.(roots)
+end
+
+"""
+    bp_gate_split(subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames = nothing)
+        -> (R_v1, R_v2, message_v1v2, message_v2v1)
+
+Apply the two-site `op` to `R_v1 * R_v2`, truncate with `svd_trunc(...; trunc)`
+(normalizing the singular values if `normalize`), and split the result back into two
+factors by the square root of the singular values. The side with more elements is the
+codomain of the SVD, so the matrix it factorizes is tall. Returns the new factors and the
+`R†R` messages `v1 => v2` and `v2 => v1` on the new bond.
+
+The new factors share one bond name, which is the input name of both messages; the
+messages' output name appears in neither factor. `bondnames = (input, output)` sets
+these two names; by default they are the names `svd_trunc` mints.
+"""
+function bp_gate_split(
+        subalgorithm, op::AbstractITensor, R_v1::AbstractITensor, R_v2::AbstractITensor;
+        trunc, normalize, bondnames = nothing
+    )
     op_R_v1v2 = apply(op, R_v1 * R_v2)
-    U_v1, S, U_v2 = svd_trunc(op_R_v1v2, setdiff(names(R_v1), names(R_v2)); trunc)
+    v1_rows = length(R_v1) >= length(R_v2)
+    rows = v1_rows ? setdiff(names(R_v1), names(R_v2)) : setdiff(names(R_v2), names(R_v1))
+    U, S, V = svd_trunc(op_R_v1v2, rows; trunc)
+    if !isnothing(bondnames)
+        name_u, name_v = names(S)
+        name_v1, name_v2 = bondnames
+        U = rename(U, name_u => name_v1)
+        S = rename(S, name_u => name_v1, name_v => name_v2)
+        V = rename(V, name_v => name_v2)
+    end
 
     normalize && normalize!(S)
 
     name_v1, name_v2 = names(S)
     sqrt_S = sqrth_safe(S, (name_v1,), (name_v2,); atol = 0, rtol = 0)
-    R_v1 = rename(U_v1 * sqrt_S, name_v2 => name_v1)
-    R_v2 = sqrt_S * U_v2
+    R_U = rename(U * sqrt_S, name_v2 => name_v1)
+    R_V = sqrt_S * V
+    R_v1, R_v2 = v1_rows ? (R_U, R_V) : (R_V, R_U)
 
-    dest[v1] = foldl((ψ, (_, y)) -> y * ψ, roots_v1; init = Q_v1 * R_v1)
-    dest[v2] = foldl((ψ, (_, y)) -> y * ψ, roots_v2; init = Q_v2 * R_v2)
-
-    env[v1 => v2] = operator(
+    message_v1v2 = operator(
         rename(conj(R_v1), name_v1 => name_v2) * R_v1, (name_v2,), (name_v1,)
     )
-    env[v2 => v1] = operator(
+    message_v2v1 = operator(
         rename(conj(R_v2), name_v1 => name_v2) * R_v2, (name_v2,), (name_v1,)
     )
-    return dest
+    return R_v1, R_v2, message_v1v2, message_v2v1
+end
+
+"""
+    bp_gate_restore!(subalgorithm, Q, R, inverse_roots)
+
+The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize!`](@ref) undone by
+contracting `inverse_roots`. The data of `Q` may be overwritten.
+"""
+function bp_gate_restore!(
+        ::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor, inverse_roots
+    )
+    return foldl((ψ, y) -> y * ψ, inverse_roots; init = Q * R)
 end
