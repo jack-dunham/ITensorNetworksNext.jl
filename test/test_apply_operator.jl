@@ -14,7 +14,9 @@ using MatrixAlgebraKit: svd_trunc, truncrank
 using NamedGraphs: named_cycle_graph, named_grid, named_path_graph
 using Random: AbstractRNG
 using StableRNGs: StableRNG
+using TensorAlgebra: TensorOperationsContract
 using TensorKitSectors: FermionParity
+using TensorOperations: TensorOperations as TO
 using Test: @test, @test_throws, @testset
 
 const spinone = Base.OneTo(3)
@@ -179,6 +181,8 @@ end
     end
 end
 
+# The middle vertices have degree 3, so a `TensorOperationsContract` absorbs two message
+# roots in place, overwriting `state[v]`.
 @testset "apply_operators! and input preservation (T=$T)" for T in
     (Float32, Float64, ComplexF64)
     rng = StableRNG(123)
@@ -193,12 +197,52 @@ end
     ]
     snapshot = Dict(v => copy(network[v]) for v in vertices(g))
     rtol = eps(real(T))^(1 / 3)
+    buffered_update = SimpleBPGateUpdate(; contract_alg = TensorOperationsContract())
+    buffered = BPApplyGate(; trunc = truncrank(2), subalgorithm = buffered_update)
 
     @testset "apply_operators leaves its input unchanged" begin
         apply_operators(gates, network, env; trunc = truncrank(2))
         @test all(v -> network[v] == snapshot[v], vertices(g))
         apply_operator(gates[1], network, env; trunc = truncrank(2))
         @test all(v -> network[v] == snapshot[v], vertices(g))
+        apply_operators(gates, network, env; operator_alg = buffered)
+        @test all(v -> network[v] == snapshot[v], vertices(g))
+        apply_operator(gates[1], network, env; alg = buffered)
+        @test all(v -> network[v] == snapshot[v], vertices(g))
+    end
+
+    @testset "a TensorOperationsContract matches the default contraction" begin
+        gated, gated_env = apply_operators(gates, network, env; trunc = truncrank(2))
+        buffered_state, buffered_env =
+            apply_operators(gates, network, env; operator_alg = buffered)
+        # The two runs mint different bond names, so compare name-independent quantities.
+        @test prod(buffered_state) ≈ prod(gated) rtol = rtol
+        for edge in edges(gated_env)
+            @test norm(buffered_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
+        end
+    end
+
+    @testset "a BufferAllocator matches the default contraction" begin
+        contract_alg = TensorOperationsContract(; allocator = TO.BufferAllocator())
+        subalgorithm = SimpleBPGateUpdate(; contract_alg)
+        operator_alg = BPApplyGate(; trunc = truncrank(2), subalgorithm)
+        gated, gated_env = apply_operators(gates, network, env; trunc = truncrank(2))
+        buffered_state, buffered_env = apply_operators(gates, network, env; operator_alg)
+        @test prod(buffered_state) ≈ prod(gated) rtol = rtol
+        for edge in edges(gated_env)
+            @test norm(buffered_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
+        end
+    end
+
+    T <: Real && @testset "complex messages with a TensorOperationsContract" begin
+        complex_env = copy(env)
+        for edge in edges(env)
+            complex_env[edge] = (1 + 0im) * env[edge]
+        end
+        buffered = BPApplyGate(; subalgorithm = buffered_update)
+        simple_state, _ = apply_operator(gates[1], network, complex_env)
+        buffered_state, _ = apply_operator(gates[1], network, complex_env; alg = buffered)
+        @test prod(buffered_state) ≈ prod(simple_state) rtol = rtol
     end
 
     @testset "apply_operators! matches apply_operators" begin
@@ -212,7 +256,7 @@ end
     end
 
     @testset "apply_operator! names the new bond as requested ($subalgorithm)" for
-        subalgorithm in (SimpleBPGateUpdate(),)
+        subalgorithm in (SimpleBPGateUpdate(), buffered_update)
         algorithm = BPApplyGate(; subalgorithm)
         gated, gated_env = copy(network), copy(env)
         for v in vertices(g)
@@ -230,6 +274,21 @@ end
         end
         @test prod(gated) ≈ apply(gates[1], prod(network)) rtol = rtol
     end
+end
+
+# Graded roots change the bond's axis, so a `TensorOperationsContract` allocates instead.
+@testset "graded storage with a TensorOperationsContract" begin
+    rng = StableRNG(123)
+    g = named_path_graph(3)
+    site_axes = Dict(v => Index(spinone_u1) for v in vertices(g))
+    network, env =
+        random_state(rng, Float64, g, site_axes; nlayers = 1, trunc = truncrank(4))
+    gate = randn_operator(rng, Float64, (site_axes[1], site_axes[2]))
+    subalgorithm = SimpleBPGateUpdate(; contract_alg = TensorOperationsContract())
+    gated, _ = apply_operators([gate], network, env)
+    operator_alg = BPApplyGate(; subalgorithm)
+    buffered, _ = apply_operators([gate], network, env; operator_alg)
+    @test prod(buffered) ≈ prod(gated)
 end
 
 @testset "BeliefPropagationEnvironmentPreparation (T=$T)" for T in (Float64, ComplexF64)

@@ -432,11 +432,14 @@ end
 # === Default strategy: BPApplyGate ===
 
 """
-    SimpleBPGateUpdate()
+    SimpleBPGateUpdate(; contract_alg = nothing)
 
-The gate stages of [`BPApplyGate`](@ref) that allocate a new tensor at every step.
+The gate stages of [`BPApplyGate`](@ref), absorbing the message roots with
+[`absorb_matrices!`](@ref) under `contract_alg`.
 """
-struct SimpleBPGateUpdate end
+@kwdef struct SimpleBPGateUpdate{ContractAlg}
+    contract_alg::ContractAlg = nothing
+end
 
 @kwdef struct BPApplyGate{Trunc, Subalgorithm} <: ApplyOperatorAlgorithm
     trunc::Trunc = nothing
@@ -535,9 +538,11 @@ The data of `state[v]` may be overwritten.
 `w` need not be a vertex of `state`: the bond is identified as the name `state[v]`
 shares with `env[w => v]`.
 """
-function bp_gate_factorize!(::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w)
+function bp_gate_factorize!(
+        subalgorithm::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w
+    )
     roots = [message_gauge(m) for m in incoming_messages(env, v => w)]
-    ψ = foldl((ψ, (x, _)) -> x * ψ, roots; init = state[v])
+    ψ = absorb_matrices!(subalgorithm.contract_alg, state[v], first.(roots)...)
     bondname = only(intersect(names(state[v]), names(env[w => v])))
     Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
     return Q, R, last.(roots)
@@ -597,7 +602,8 @@ The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize!`](@ref) undone 
 contracting `inverse_roots`. The data of `Q` may be overwritten.
 """
 function bp_gate_restore!(
-        ::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor, inverse_roots
+        subalgorithm::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor,
+        inverse_roots
     )
-    return foldl((ψ, y) -> y * ψ, inverse_roots; init = Q * R)
+    return absorb_matrices!(subalgorithm.contract_alg, Q, inverse_roots...) * R
 end
