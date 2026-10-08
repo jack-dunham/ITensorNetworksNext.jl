@@ -6,7 +6,7 @@ using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTe
     NamedTensorOperator, apply, inputinds, inputnames, mulopadd!, name, names,
     nametype, operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
-using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, qr_compact!, svd_trunc
+using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact!, svd_trunc
 using NamedGraphs: boundary_edges, vertextype
 using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_safe
 using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
@@ -544,7 +544,7 @@ function bp_gate_factorize!(
     roots = [message_gauge(m) for m in incoming_messages(env, v => w)]
     ψ = absorb_matrices!(subalgorithm.contract_alg, state[v], first.(roots)...)
     bondname = only(intersect(names(state[v]), names(env[w => v])))
-    Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
+    Q, R = qr_compact!(ψ, setdiff(names(ψ), [bondname], names(op)))
     return Q, R, last.(roots)
 end
 
