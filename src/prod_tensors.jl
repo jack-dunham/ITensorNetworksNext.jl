@@ -1,6 +1,6 @@
 using AbstractTrees: nodevalue
 using Combinatorics: combinations
-using ITensorBase: ITensor, dim, inds, mulopadd!, names, unnamed
+using ITensorBase: ITensor, findname, inds, mulopadd!, names, unnamed
 
 """
     ContractionTreeAlgorithm
@@ -37,7 +37,9 @@ function prod_tensors!(alg, y, x, xs...; conjlist = falses(length(xs) + 1))
     opx = op(1)
     for (i, m) in enumerate(Base.front(xs))
         labels = Tuple(symdiff(names(x), names(m)))
-        dims = map(n -> n in names(x) ? size(x, dim(x, n)) : size(m, dim(m, n)), labels)
+        dims = map(labels) do n
+            return n in names(x) ? size(x, findname(x, n)) : size(m, findname(m, n))
+        end
         T = promote_type(eltype(x), eltype(m))
         z = ITensor(similar(unnamed(x), T, dims), labels)
         mulopadd!(z, opx, x, op(i + 1), m, true, false; alg)
