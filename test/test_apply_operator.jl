@@ -3,11 +3,12 @@ using GradedArrays: U1, gradedrange
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, outputnames,
     setname, uniquename
-using ITensorNetworksNext: ITensorNetworksNext, BeliefPropagationEnvironmentPreparation,
-    MessageUpdateAlgorithm, NormNetwork, SimpleMessageUpdate, StopWhenVertexRevisited,
-    apply_operator, apply_operators, apply_operators!,
-    beliefpropagation, bp_gate_factorize!, bp_gate_restore!, bp_gate_split, insertlink!,
-    message_environment, message_normnetwork, tensornetwork
+using ITensorNetworksNext: ITensorNetworksNext, BPApplyGate,
+    BeliefPropagationEnvironmentPreparation, MessageUpdateAlgorithm,
+    NormNetwork, SimpleBPGateUpdate, SimpleMessageUpdate, StopWhenVertexRevisited,
+    apply_operator, apply_operator!, apply_operators, apply_operators!, beliefpropagation,
+    bp_gate_factorize!, bp_gate_restore!, bp_gate_split, insertlink!, message_environment,
+    message_normnetwork, tensornetwork
 using LinearAlgebra: norm
 using MatrixAlgebraKit: svd_trunc, truncrank
 using NamedGraphs: named_cycle_graph, named_grid, named_path_graph
@@ -148,18 +149,20 @@ end
         gate = randn_operator(rng, T, (site_axes[2], site_axes[3]))
         gated = copy(network)
         gated[2], gated[3] = copy(network[2]), copy(network[3])
-        Q_2, R_2, invsqrt_2 = bp_gate_factorize!(gate, gated, env, 2, 3)
-        Q_3, R_3, invsqrt_3 = bp_gate_factorize!(gate, gated, env, 3, 2)
+        simple = SimpleBPGateUpdate()
+        Q_2, R_2, invsqrt_2, buffer_2 = bp_gate_factorize!(simple, gate, gated, env, 2, 3)
+        Q_3, R_3, invsqrt_3, buffer_3 = bp_gate_factorize!(simple, gate, gated, env, 3, 2)
         bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
-        R_2, R_3, message_23, message_32 =
-            bp_gate_split(gate, R_2, R_3; trunc = nothing, normalize = false, bondnames)
+        R_2, R_3, message_23, message_32 = bp_gate_split(
+            simple, gate, R_2, R_3; trunc = nothing, normalize = false, bondnames
+        )
         @test intersect(names(R_2), names(R_3)) == [bondnames[1]]
         for message in (message_23, message_32)
             @test only(inputnames(message)) == bondnames[1]
             @test only(outputnames(message)) == bondnames[2]
         end
-        gated[2] = bp_gate_restore!(Q_2, R_2, invsqrt_2)
-        gated[3] = bp_gate_restore!(Q_3, R_3, invsqrt_3)
+        gated[2] = bp_gate_restore!(simple, Q_2, R_2, invsqrt_2, buffer_2)
+        gated[3] = bp_gate_restore!(simple, Q_3, R_3, invsqrt_3, buffer_3)
         @test prod(gated) ≈ apply(gate, prod(network)) rtol = eps(real(T))^(1 / 3)
     end
 
@@ -208,6 +211,26 @@ end
         for edge in edges(gated_env)
             @test norm(inplace_env[edge]) ≈ norm(gated_env[edge]) rtol = rtol
         end
+    end
+
+    @testset "apply_operator! names the new bond as requested ($subalgorithm)" for
+        subalgorithm in (SimpleBPGateUpdate(),)
+        algorithm = BPApplyGate(; subalgorithm)
+        gated, gated_env = copy(network), copy(env)
+        for v in vertices(g)
+            gated[v] = copy(network[v])
+        end
+        bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
+        v1, v2 = (1, 2), (2, 2)
+        apply_operator!(
+            algorithm, gated, gates[1], gated, gated_env; vertices = [v1, v2], bondnames
+        )
+        @test intersect(names(gated[v1]), names(gated[v2])) == [bondnames[1]]
+        for message in (gated_env[v1 => v2], gated_env[v2 => v1])
+            @test only(inputnames(message)) == bondnames[1]
+            @test only(outputnames(message)) == bondnames[2]
+        end
+        @test prod(gated) ≈ apply(gates[1], prod(network)) rtol = rtol
     end
 end
 
