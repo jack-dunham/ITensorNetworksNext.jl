@@ -3,7 +3,7 @@ module ITensorNetworksNext
 if VERSION >= v"1.11.0-DEV.469"
     eval(
         Meta.parse(
-            "public apply_operator, apply_operators"
+            "public apply_operator, apply_operators, apply_operators!"
         )
     )
 end
