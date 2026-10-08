@@ -3,12 +3,12 @@ using AlgorithmsInterface: AlgorithmsInterface as AI
 using Base: @kwdef
 using Graphs: Graphs, dst, src, vertices
 using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTensor,
-    NamedTensorOperator, apply, dim, inputinds, inputnames, mulopadd!, name, names,
+    NamedTensorOperator, apply, inputinds, inputnames, mulopadd!, name, names,
     nametype, operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
 using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, qr_compact!, svd_trunc
 using NamedGraphs: boundary_edges, vertextype
-using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_invsqrth_safe, sqrth_safe
+using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_safe
 using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
 
 # Asymmetric (Gram) root of a Hermitian positive semidefinite matrix, as the pair
@@ -511,39 +511,38 @@ function apply_gate_bp_nsite!(
         trunc, normalize, subalgorithm, bondnames = nothing
     )
     v1, v2 = vertices
-    Q_v1, R_v1, invsqrt_messages_v1 =
+    Q_v1, R_v1, inverse_roots_v1 =
         bp_gate_factorize!(subalgorithm, op, state, env, v1, v2)
-    Q_v2, R_v2, invsqrt_messages_v2 =
+    Q_v2, R_v2, inverse_roots_v2 =
         bp_gate_factorize!(subalgorithm, op, state, env, v2, v1)
     R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
         subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames
     )
-    dest[v1] = bp_gate_restore!(subalgorithm, Q_v1, R_v1, invsqrt_messages_v1)
-    dest[v2] = bp_gate_restore!(subalgorithm, Q_v2, R_v2, invsqrt_messages_v2)
+    dest[v1] = bp_gate_restore!(subalgorithm, Q_v1, R_v1, inverse_roots_v1)
+    dest[v2] = bp_gate_restore!(subalgorithm, Q_v2, R_v2, inverse_roots_v2)
     env[v1 => v2] = message_v1v2
     env[v2 => v1] = message_v2v1
     return dest
 end
 
 """
-    bp_gate_factorize!(subalgorithm, op, state, env, v, w) -> (Q, R, invsqrt_messages)
+    bp_gate_factorize!(subalgorithm, op, state, env, v, w) -> (Q, R, inverse_roots)
 
-Gauge `state[v]` by the square roots of the messages in `env` on every edge into `v`
-except `w => v`, and QR-factorize it so that `R` carries the bond to `w` and the names
-`state[v]` shares with `op`. `invsqrt_messages` are the inverse square roots that undo
-the gauge, for [`bp_gate_restore!`](@ref). The data of `state[v]` may be overwritten.
+Gauge `state[v]` by the `message_gauge` roots of the messages in `env` on every edge into
+`v` except `w => v`, and QR-factorize it so that `R` carries the bond to `w` and the names
+`state[v]` shares with `op`. `inverse_roots` undo the gauge, for [`bp_gate_restore!`](@ref).
+The data of `state[v]` may be overwritten.
 
 `w` need not be a vertex of `state`: the bond is identified as the name `state[v]`
 shares with `env[w => v]`.
 """
 function bp_gate_factorize!(::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w)
     edges_in = [e for e in boundary_edges(env, [v]; dir = :in) if src(e) != w]
-    roots = [sqrth_invsqrth_safe(project_hermitian(env[e])) for e in edges_in]
-    sqrt_messages, invsqrt_messages = first.(roots), last.(roots)
-    ψ = foldl((ψ, m) -> apply(m, ψ), sqrt_messages; init = state[v])
+    roots = [message_gauge(env[e]) for e in edges_in]
+    ψ = foldl((ψ, (x, _)) -> x * ψ, roots; init = state[v])
     bondname = only(intersect(names(state[v]), names(env[w => v])))
     Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
-    return Q, R, invsqrt_messages
+    return Q, R, last.(roots)
 end
 
 """
@@ -594,13 +593,13 @@ function bp_gate_split(
 end
 
 """
-    bp_gate_restore!(subalgorithm, Q, R, invsqrt_messages)
+    bp_gate_restore!(subalgorithm, Q, R, inverse_roots)
 
 The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize!`](@ref) undone by
-applying `invsqrt_messages`. The data of `Q` may be overwritten.
+contracting `inverse_roots`. The data of `Q` may be overwritten.
 """
 function bp_gate_restore!(
-        ::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor, invsqrt_messages
+        ::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor, inverse_roots
     )
-    return foldl((ψ, m) -> apply(m, ψ), invsqrt_messages; init = Q * R)
+    return foldl((ψ, y) -> y * ψ, inverse_roots; init = Q * R)
 end
