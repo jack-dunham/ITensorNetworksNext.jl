@@ -39,15 +39,15 @@ function transfer_tensors(tn, env::CTMEnvironment, face::NamedFace)
     return Dictionary(src.(face), transfers)
 end
 
-# Carries `block` from `start` along `edges`, each directed the way the walk travels, through the
-# transfer tensor where it enters each edge and the inverse of the corner where it leaves.
-function carried_blocks(start, edges, transfers, corners, block)
-    blocks = Dictionary([start], [block])
-    for edge in edges
-        block = transfers[src(edge)] * block * diaginv(corners[dst(edge)])
-        set!(blocks, edge, block)
+# Carries `projector` from the first edge of `cycle` along the others, through the transfer tensor
+# entering each edge and the inverse corner leaving it.
+function propagate_projector(cycle, transfers, corners, projector)
+    projectors = Dictionary([first(cycle)], [projector])
+    for edge in cycle[2:end]
+        projector = transfers[src(edge)] * projector * diaginv(corners[dst(edge)])
+        set!(projectors, edge, projector)
     end
-    return blocks
+    return projectors
 end
 
 # Inverse of a diagonal two-index `tensor`, such as a corner, as a map between its indices.
@@ -129,19 +129,21 @@ function face_projectors(env::CTMEnvironment, face, transfers, right_basis, left
 
     corners = Dictionary(dst.(face), [cornertensor(env, edge) for edge in face])
 
-    start, others = last(face), face[1:(end - 1)]
-
     # The scaling also takes the bases' shared index `k` to the bond of the first step's edge.
     k = last(inds(right_basis))
-    right_bond, left_bond =
-        only(envinds(env, last(others))), only(envinds(env, first(others)))
-    right_block = right_basis * diagonal_tensor(roots .^ (length(face) - 1), k, right_bond)
-    left_block = left_basis * diagonal_tensor(inv.(roots), k, left_bond)
 
-    right_projectors = carried_blocks(
-        reverse(start), reverse.(reverse(others)), transfers, corners, right_block
-    )
-    left_projectors = carried_blocks(start, others, transfers, corners, left_block)
+    start = last(face)
+    right_bond = only(envinds(env, prevedge(env.embedding, start)))
+    left_bond = only(envinds(env, nextedge(env.embedding, start)))
+
+    right_projector =
+        right_basis * diagonal_tensor(roots .^ (length(face) - 1), k, right_bond)
+    left_projector = left_basis * diagonal_tensor(inv.(roots), k, left_bond)
+
+    right_projectors =
+        propagate_projector(rightcycle(face), transfers, corners, right_projector)
+    left_projectors =
+        propagate_projector(leftcycle(face), transfers, corners, left_projector)
 
     return right_projectors, left_projectors
 end
