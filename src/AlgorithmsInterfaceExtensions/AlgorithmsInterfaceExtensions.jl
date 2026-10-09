@@ -58,6 +58,102 @@ function Base.propertynames(state::NestedState)
     return (fieldnames(typeof(state))..., :iterate)
 end
 
+# ============================ SweepAlgorithm ==============================================
+
+# Applies `update` to `iterate` at one schedule entry per iteration.
+function update!(update, iterate, problem, entry)
+    return throw(MethodError(update!, (update, iterate, problem, entry)))
+end
+
+@kwdef struct SweepAlgorithm{Schedule, Update, StoppingCriterion <: AI.StoppingCriterion} <:
+    AI.Algorithm
+    schedule::Schedule
+    update::Update
+    stopping_criterion::StoppingCriterion = AI.StopAfterIteration(length(schedule))
+end
+
+@kwdef mutable struct SweepState{
+        Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
+    } <: AI.State
+    iterate::Iterate
+    iteration::Int = 0
+    stopping_criterion_state::StoppingCriterionState
+end
+
+function AI.initialize_state(
+        problem::AI.Problem, algorithm::SweepAlgorithm; iterate, iteration::Int = 0
+    )
+    stopping_criterion_state = AI.initialize_state(
+        problem, algorithm, algorithm.stopping_criterion; iterate
+    )
+    return SweepState(; iterate, iteration, stopping_criterion_state)
+end
+
+function AI.initialize_state!(
+        problem::AI.Problem, algorithm::SweepAlgorithm, state::SweepState;
+        iteration::Int = 0
+    )
+    state.iteration = iteration
+    AI.initialize_state!(
+        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
+    )
+    return state
+end
+
+function AI.step!(problem::AI.Problem, algorithm::SweepAlgorithm, state::SweepState)
+    update!(
+        algorithm.update, state.iterate, problem, algorithm.schedule[state.iteration]
+    )
+    return state
+end
+
+# ============================ IterateUntilConverged =======================================
+
+# Repeats `subalgorithm` on the same problem until `stopping_criterion` is met.
+@kwdef struct IterateUntilConverged{
+        Subalgorithm <: AI.Algorithm, StoppingCriterion <: AI.StoppingCriterion,
+    } <: NestedAlgorithm
+    subalgorithm::Subalgorithm
+    stopping_criterion::StoppingCriterion
+end
+
+@kwdef mutable struct IterateUntilConvergedState{
+        Substate <: AI.State, StoppingCriterionState <: AI.StoppingCriterionState,
+    } <: NestedState
+    substate::Substate
+    iteration::Int = 0
+    stopping_criterion_state::StoppingCriterionState
+end
+
+function AI.initialize_state(
+        problem::AI.Problem, algorithm::IterateUntilConverged; iterate, iteration::Int = 0
+    )
+    substate = AI.initialize_state(problem, algorithm.subalgorithm; iterate)
+    stopping_criterion_state = AI.initialize_state(
+        problem, algorithm, algorithm.stopping_criterion; iterate
+    )
+    return IterateUntilConvergedState(; substate, iteration, stopping_criterion_state)
+end
+
+function AI.initialize_state!(
+        problem::AI.Problem, algorithm::IterateUntilConverged,
+        state::IterateUntilConvergedState;
+        iteration::Int = 0
+    )
+    state.iteration = iteration
+    AI.initialize_state!(
+        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
+    )
+    return state
+end
+
+function initialize_subsolve(
+        problem::AI.Problem, algorithm::IterateUntilConverged,
+        state::IterateUntilConvergedState
+    )
+    return problem, algorithm.subalgorithm, state.substate
+end
+
 # ============================ StopWhenConverged ===========================================
 
 # Stopping criterion that fires once `iterate_diff(iterate, previous_iterate) < tol`.

@@ -4,7 +4,7 @@ using ITensorNetworksNext.AlgorithmsInterfaceExtensions:
 using Test: @test, @test_throws, @testset
 
 # Concrete `NestedAlgorithm` subtype: holds a flat list of child algorithms
-# and picks them by iteration index. Mirrors how `BeliefPropagationAlgorithm`
+# and picks them by iteration index. Mirrors how `IterateUntilConverged`
 # shapes itself on top of the minimal `AIE.NestedAlgorithm`.
 struct TestProblem <: AI.Problem end
 
