@@ -5,8 +5,7 @@ using Dictionaries: Dictionary, Indices, set!, unset!
 using Graphs: AbstractGraph, connected_components, edges, is_directed, is_tree
 using ITensorBase: inputnames, outputnames, state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
-    edge_subgraph, in_incident_edges, incident_edges, to_graph_index,
-    vertextype
+    edge_subgraph, in_incident_edges, incident_edges, to_graph_index, vertextype
 using SplitApplyCombine: mapmany
 
 struct MessageCache{T, V} <: AbstractEdgeDataGraph{T, V}
@@ -169,8 +168,8 @@ function vertex_scalars(factors, messages, vertices)
 end
 
 # Takes factors as an unused argument for consistency with `vertex_scalar`.
-edge_scalar(_factors, env, edge) = contract_network(environment_tensors(env, edge))[]
-face_scalar(_factors, env, face) = contract_network(environment_tensors(env, face))[]
+edge_scalar(_factors, env, edge) = prod_tensors(environment_tensors(env, edge), Greedy())[]
+face_scalar(_factors, env, face) = prod_tensors(environment_tensors(env, face), Greedy())[]
 edge_scalars(factors, messages) = edge_scalars(factors, messages, edges(factors))
 function edge_scalars(factors, messages, edges)
     return narrow_map(e -> edge_scalar(factors, messages, e), edges)

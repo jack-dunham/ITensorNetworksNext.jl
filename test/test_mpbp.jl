@@ -1,11 +1,11 @@
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, IndexName, NamedTensor, align, inds, name, unnamed
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
-using ITensorNetworksNext: CornerTransferProduct, DenseEig, ITensorNetwork,
-    beliefpropagation, bethe_free_entropy, contract_network, ctm_environment, ctmrg,
-    envinds, expect, face_update!, hexagonal_position, invariant_subspace, leftface,
-    linkinds, nextedge, normnetwork, planar_embedding, prevedge, tensornetwork,
-    vertex_scalar
+using ITensorNetworksNext: CornerTransferProduct, DenseEig, Greedy, ITensorNetwork,
+    beliefpropagation, bethe_free_entropy, ctm_environment, ctmrg, envinds, expect,
+    face_update!, flatten_network, hexagonal_position, invariant_subspace, leftface,
+    linkinds, nextedge, normnetwork, planar_embedding, prevedge, prod_tensors,
+    tensornetwork, vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using StableRNGs: StableRNG
@@ -95,7 +95,7 @@ const LATTICES = (
         tn, _ = ising_setup(g, 0.4)
         emb = planar_embedding(g, pos)
         env = run_sweeps!(bp_environment(tn, g, emb), tn; maxdim = 16, nsweeps = 30)
-        z_exact = contract_network(tn)[]
+        z_exact = prod_tensors(tn, Greedy())[]
         @test exp(bethe_free_entropy(tn, env)) ≈ z_exact rtol = 1.0e-10
     end
 
@@ -170,7 +170,7 @@ const LATTICES = (
         β = 0.4
         tn, l = ising_setup(g, β)
         emb = planar_embedding(g, pos)
-        z = contract_network(tn)[]
+        z = prod_tensors(tn, Greedy())[]
         err(χ) = abs(
             exp(
                 bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = χ, stopping_criterion = sc))
@@ -181,7 +181,8 @@ const LATTICES = (
         @test exp(bethe_free_entropy(tn, env)) ≈ z rtol = 1.0e-10
         v = first(vertices(g))
         tn_sz = ising_network(l, β, g; h = 0.1, sz_vertices = [v])
-        @test expect(tn, env, v, tn_sz[v]) ≈ contract_network(tn_sz)[] / z rtol = 1.0e-10
+        @test expect(tn, env, v, tn_sz[v]) ≈ prod_tensors(tn_sz, Greedy())[] / z rtol =
+            1.0e-10
     end
 
     @testset "Z_B is invariant under link gauge transformations" begin
@@ -216,7 +217,8 @@ const LATTICES = (
         nn = normnetwork(ψ)
         emb = planar_embedding(g, v -> v)
         env = ctmrg(nn, emb; maxdim = 8, stopping_criterion = sc)
-        @test exp(bethe_free_entropy(nn, env)) ≈ contract_network(nn)[] rtol = 1.0e-10
+        @test exp(bethe_free_entropy(nn, env)) ≈
+            prod_tensors(flatten_network(nn), Greedy())[] rtol = 1.0e-10
     end
 
     @testset "Complex element type" begin
@@ -224,7 +226,7 @@ const LATTICES = (
         tn, _ = ising_setup(g, 0.4 + 0im)
         emb = planar_embedding(g, v -> v)
         env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
-        @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-10
+        @test exp(bethe_free_entropy(tn, env)) ≈ prod_tensors(tn, Greedy())[] rtol = 1.0e-10
     end
 
     @testset "`maxdim` above the available rank" begin
@@ -235,7 +237,7 @@ const LATTICES = (
             bethe_free_entropy(tn, ctmrg(tn, emb; maxdim = 64, stopping_criterion = sc))
         )
         @test isfinite(z_b)
-        @test z_b ≈ contract_network(tn)[] rtol = 1.0e-10
+        @test z_b ≈ prod_tensors(tn, Greedy())[] rtol = 1.0e-10
     end
 
     @testset "Converges at the critical coupling on a 6×6 grid" begin
@@ -243,7 +245,7 @@ const LATTICES = (
         tn, _ = ising_setup(g, log(1 + √2) / 2; h = 0.0)
         emb = planar_embedding(g, v -> v)
         env = ctmrg(tn, emb; maxdim = 8, stopping_criterion = sc)
-        @test exp(bethe_free_entropy(tn, env)) ≈ contract_network(tn)[] rtol = 1.0e-12
+        @test exp(bethe_free_entropy(tn, env)) ≈ prod_tensors(tn, Greedy())[] rtol = 1.0e-12
     end
 
     @testset "Edge tensors converge entry by entry at h = 0" begin
