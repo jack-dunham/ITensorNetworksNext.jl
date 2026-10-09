@@ -10,50 +10,19 @@ struct CTMRGProblem{Network} <: AI.Problem
     network::Network
 end
 
-@kwdef struct CTMRGAlgorithm{Faces, Alg, StoppingCriterion <: AI.StoppingCriterion} <:
-    AI.Algorithm
-    faces::Faces
+@kwdef struct FaceUpdate{Alg} <: AbstractAlgorithm
     maxdim::Int
     subspace_algorithm::Alg
-    stopping_criterion::StoppingCriterion
 end
 
-@kwdef mutable struct CTMRGState{
-        Iterate, StoppingCriterionState <: AI.StoppingCriterionState,
-    } <: AI.State
-    iterate::Iterate
-    iteration::Int = 0
-    stopping_criterion_state::StoppingCriterionState
-end
-
-function AI.initialize_state(
-        problem::CTMRGProblem, algorithm::CTMRGAlgorithm; iterate, iteration::Int = 0
+function AIE.update!(u::FaceUpdate, env, problem::CTMRGProblem, f)
+    return face_update!(
+        env,
+        problem.network,
+        f;
+        maxdim = u.maxdim,
+        alg = u.subspace_algorithm
     )
-    stopping_criterion_state = AI.initialize_state(
-        problem, algorithm, algorithm.stopping_criterion; iterate
-    )
-    return CTMRGState(; iterate, iteration, stopping_criterion_state)
-end
-
-function AI.initialize_state!(
-        problem::CTMRGProblem, algorithm::CTMRGAlgorithm, state::CTMRGState;
-        iteration::Int = 0
-    )
-    state.iteration = iteration
-    AI.initialize_state!(
-        problem, algorithm, algorithm.stopping_criterion, state.stopping_criterion_state
-    )
-    return state
-end
-
-function AI.step!(problem::CTMRGProblem, algorithm::CTMRGAlgorithm, state::CTMRGState)
-    for f in algorithm.faces
-        face_update!(
-            state.iterate, problem.network, f;
-            maxdim = algorithm.maxdim, alg = algorithm.subspace_algorithm
-        )
-    end
-    return state
 end
 
 # Change in the spectrum of each face's eigenvalue corner `c[d_{m-1}]`, divided by its largest
@@ -94,8 +63,12 @@ function ctmrg(
         subspace_algorithm,
         Tuple{Matrix{Float64}, Int}
     )
-    algorithm = CTMRGAlgorithm(;
-        faces, maxdim, subspace_algorithm = alg,
+    sweep = SweepAlgorithm(;
+        schedule = faces,
+        update = FaceUpdate(; maxdim, subspace_algorithm = alg)
+    )
+    algorithm = IterateUntilConverged(;
+        subalgorithm = sweep,
         stopping_criterion = AI.StopAfterIteration(maxiter) | StopWhenConverged(; tol)
     )
     problem = CTMRGProblem(tn)
