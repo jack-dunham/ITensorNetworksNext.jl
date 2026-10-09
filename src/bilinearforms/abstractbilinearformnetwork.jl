@@ -1,6 +1,6 @@
 using DataGraphs: DataGraphs, get_vertex_data, is_vertex_assigned
 using Dictionaries: Dictionaries, isinsertable, issettable
-using Graphs: Graphs, edges, vertices
+using Graphs: Graphs, AbstractEdge, edges, vertices
 using ITensorBase: ITensorBase, conj, inds, nametype, rename
 using NamedGraphs: NamedGraphs, decoded_vertex, encoded_graph, encoded_vertex
 
@@ -138,6 +138,11 @@ The bra-layer network of `bn`. Unless a subtype stores its bra layer as a networ
 `BraView`, whose tensors are built by [`bratensor`](@ref) when accessed.
 """
 branetwork(bn::AbstractBilinearFormNetwork) = BraView(bn)
+
+# The ket and bra layers' link indices; the operator layer has no links.
+function linkinds(bn::AbstractBilinearFormNetwork, edge::AbstractEdge)
+    return [linkinds(ketnetwork(bn), edge); linkinds(branetwork(bn), edge)]
+end
 
 """
     struct BraView{T, V, I, P <: AbstractBilinearFormNetwork{T, V, I}} <: AbstractITensorNetwork{T, V}
