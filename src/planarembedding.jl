@@ -19,6 +19,11 @@ Base.:(==)(face1::NamedFace, face2::NamedFace) = first(face1.edges) == first(fac
 Base.isequal(face1::NamedFace, face2::NamedFace) = face1 == face2
 Base.hash(face::NamedFace, h::UInt) = hash(first(face.edges), hash(:NamedFace, h))
 
+# The face's edges counterclockwise from its last edge, and their reverses clockwise from the
+# reverse of its last edge.
+leftcycle(face::NamedFace) = [last(face); face[1:(end - 1)]]
+rightcycle(face::NamedFace) = reverse.(reverse(face))
+
 struct PlanarEmbedding{V, G <: AbstractGraph}
     graph::G
     faces::Vector{NamedFace{V}}
