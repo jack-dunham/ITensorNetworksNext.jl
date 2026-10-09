@@ -14,7 +14,8 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
     vertex = src(outgoing)
     exclude = (src(incoming), dst(outgoing))
 
-    transfer = contract_network([[tn[vertex]]; environment_tensors(env, vertex; exclude)])
+    tensors = [factor_tensors(tn, vertex); environment_tensors(env, vertex; exclude)]
+    transfer = prod_tensors(tensors, Greedy())
 
     # At a vertex of degree 2 nothing else carries the far face's bonds, so its corner supplies them.
     if degree(env.embedding.graph, vertex) == 2
