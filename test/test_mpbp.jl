@@ -2,8 +2,8 @@ using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, IndexName, NamedTensor, align, inds, name, unnamed
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: CornerTransferProduct, DenseEig, Greedy, ITensorNetwork,
-    beliefpropagation, bethe_free_entropy, ctm_environment, ctmrg, envinds, expect,
-    face_update!, flatten_network, hexagonal_position, invariant_subspace, leftface,
+    KrylovEig, beliefpropagation, bethe_free_entropy, ctm_environment, ctmrg, envinds,
+    expect, face_update!, flatten_network, hexagonal_position, invariant_subspace, leftface,
     linkinds, nextedge, normnetwork, planar_embedding, prevedge, prod_tensors,
     tensornetwork, vertex_scalar
 using LinearAlgebra: Diagonal, I, inv, norm
@@ -73,6 +73,25 @@ const LATTICES = (
         end
         _, _, λ = invariant_subspace(DenseEig(), Diagonal([1.0, 5.0e-11, 0.0]), 3)
         @test length(λ) == 2
+    end
+
+    @testset "`KrylovEig` agrees with `DenseEig`" begin
+        # A cut of 60 exceeds the Krylov dimension, so the factors are applied one at a time.
+        rng = StableRNG(1)
+        matrices = [randn(rng, 60, 60) for _ in 1:3]
+        product = named_product(matrices)
+        Λ = prod(matrices)
+        for maxdim in (2, 4, 8)
+            VR, VL, λ = matrix_subspace(KrylovEig(), product, maxdim)
+            dense_VR, dense_VL, dense_λ = matrix_subspace(DenseEig(), product, maxdim)
+            @test λ ≈ dense_λ rtol = 1.0e-10
+            @test VR * VL ≈ dense_VR * dense_VL rtol = 1.0e-10
+            @test Λ * VR ≈ VR * Diagonal(λ) rtol = 1.0e-10
+            @test VL * Λ ≈ Diagonal(λ) * VL rtol = 1.0e-10
+            @test VL * VR ≈ I
+        end
+        # The dominant eigenvalues are a complex-conjugate pair.
+        @test_throws ArgumentError invariant_subspace(KrylovEig(), product, 1)
     end
 
     function run_sweeps!(env, tn; maxdim, nsweeps)
@@ -217,6 +236,26 @@ const LATTICES = (
         nn = normnetwork(ψ)
         emb = planar_embedding(g, v -> v)
         env = ctmrg(nn, emb; maxdim = 8, stopping_criterion = sc)
+        @test exp(bethe_free_entropy(nn, env)) ≈
+            prod_tensors(flatten_network(nn), Greedy())[] rtol = 1.0e-10
+    end
+
+    @testset "`KrylovEig` reaches the exact Z of a `NormNetwork`" begin
+        # Bond dimension 3 gives cuts of up to 81, which `KrylovEig` solves by Arnoldi iteration.
+        g = named_grid((3, 4))
+        l = Dict(e => Index(3) for e in edges(g))
+        l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+        s = Dict(v => Index(2) for v in vertices(g))
+        rng = StableRNG(5)
+        ψ = tensornetwork(vertices(g)) do v
+            return randn(rng, (s[v], map(e -> l[e], incident_edges(g, v))...))
+        end
+        nn = normnetwork(ψ)
+        emb = planar_embedding(g, v -> v)
+        env = ctmrg(
+            nn, emb; maxdim = 16, stopping_criterion = (; maxiter = 200, tol = 1.0e-10),
+            subspace_algorithm = KrylovEig(; rtol = 1.0e-9)
+        )
         @test exp(bethe_free_entropy(nn, env)) ≈
             prod_tensors(flatten_network(nn), Greedy())[] rtol = 1.0e-10
     end
