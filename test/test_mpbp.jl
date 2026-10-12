@@ -132,13 +132,17 @@ const LATTICES = (
             )
         )
         # A single edge tensor leaves log Z_B unchanged at the fixed point, so the pair on
-        # `d` and `reverse(d)` is perturbed together.
-        for field in (:edgetensors, :cornertensors)
-            ts = [getfield(env, field)[x] for x in (d, reverse(d))]
-            δts = [randn(rng, eltype(t), Tuple(inds(t))) for t in ts]
+        # `d` and `reverse(d)` is perturbed together, and likewise the eigenvalues of both faces.
+        faces = (leftface(emb, d), leftface(emb, reverse(d)))
+        for (field, keys, perturbation) in (
+                (:edgetensors, (d, reverse(d)), t -> randn(rng, eltype(t), Tuple(inds(t)))),
+                (:eigenvalues, faces, t -> randn(rng, eltype(t), length(t))),
+            )
+            ts = [getfield(env, field)[x] for x in keys]
+            δts = map(perturbation, ts)
             change(ε) = begin
                 env′ = copy(env)
-                for (x, t, δt) in zip((d, reverse(d)), ts, δts)
+                for (x, t, δt) in zip(keys, ts, δts)
                     getfield(env′, field)[x] = t + ε * norm(t) / norm(δt) * δt
                 end
                 abs(bethe_free_entropy(tn, env′) - logz)
