@@ -1,19 +1,29 @@
-using DiagonalArrays: diagview, setdiagindices!
+using DiagonalArrays: setdiagindices!
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
 using ITensorBase: AbstractNamedTensor, Index, NamedOneTo, unnamed
 using NamedGraphs: NamedEdge, all_edges
 
-struct CTMEnvironment{V, E <: MessageCache, C <: MessageCache, I}
+# A face's corners are all `Λ^(1/m)` for its eigenvalues `Λ`, so only `Λ` is stored, by face.
+struct CTMEnvironment{V, E <: MessageCache, I}
     embedding::PlanarEmbedding{V}
     edgetensors::E
-    cornertensors::C
+    eigenvalues::Dict{NamedFace{V}, AbstractVector}
     bases::Dict{NamedFace{V}, Tuple{AbstractNamedTensor, AbstractNamedTensor}}
     envinds::Dictionary{NamedEdge{V}, I}
 end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
-cornertensor(env::CTMEnvironment, edge) = env.cornertensors[NamedEdge(edge)]
+
+# The corner `c[edge]`, between the bonds on `edge` and on `nextedge(edge)`. Corners of the outer
+# face are 1.
+function cornertensor(env::CTMEnvironment, edge)
+    row = only(envinds(env, edge))
+    column = only(envinds(env, nextedge(env.embedding, edge)))
+    face = leftface(env.embedding, edge)
+    isnothing(face) && return ones((row, column))
+    return diagonal_tensor(corner_roots(env, face), row, column)
+end
 # The environment's indices along `edge`: those `c[edge]` shares with the corner before it.
 envinds(env::CTMEnvironment, edge) = env.envinds[NamedEdge(edge)]
 
@@ -24,11 +34,18 @@ function diagonal_tensor(diagonal, row, column)
     return tensor
 end
 
-corner_diagonal(env::CTMEnvironment, edge) = diagview(unnamed(cornertensor(env, edge)))
+# The diagonal of each corner of the `m`-edge `face`: the `m`-th roots of its eigenvalues, which
+# keep each corner's condition number the `m`-th root of the eigenvalues'.
+function corner_roots(env::CTMEnvironment, face)
+    eigenvalues, m = env.eigenvalues[face], length(face)
+    all(value -> isreal(value) && real(value) > 0, eigenvalues) &&
+        return real.(eigenvalues) .^ (1 / m)
+    return complex.(eigenvalues) .^ (1 / m)
+end
 
 function Base.copy(env::CTMEnvironment)
     return CTMEnvironment(
-        env.embedding, map(identity, env.edgetensors), map(identity, env.cornertensors),
+        env.embedding, map(identity, env.edgetensors), copy(env.eigenvalues),
         copy(env.bases), copy(env.envinds)
     )
 end
@@ -36,7 +53,7 @@ end
 """
     ctm_environment(tn, embedding, messages; bondnames = nothing) -> CTMEnvironment
 
-The χ = 1 environment whose edge tensors are the BP `messages` and whose corners are all 1.
+The χ = 1 environment whose edge tensors are the BP `messages` and whose eigenvalues are all 1.
 `bondnames` maps each directed edge to the name of its bond; by default the names are new.
 """
 function ctm_environment(
@@ -55,12 +72,12 @@ function ctm_environment(
             ones(T, bondinds[nextedge(embedding, edge)]) *
             ones(T, bondinds[prevedge(embedding, reverse(edge))])
     end
-    corners = messagecache(edges) do edge
-        return ones(T, (bondinds[edge]..., bondinds[nextedge(embedding, edge)]...))
-    end
+    eigenvalues = Dict{eltype(embedding.faces), AbstractVector}(
+        face => ones(T, 1) for face in embedding.faces
+    )
 
     return CTMEnvironment(
-        embedding, edgetensors, corners,
+        embedding, edgetensors, eigenvalues,
         Dict{eltype(embedding.faces), Tuple{AbstractNamedTensor, AbstractNamedTensor}}(),
         bondinds
     )
@@ -95,7 +112,7 @@ function environment_tensors(env::CTMEnvironment, edge::Union{AbstractEdge, Pair
 end
 
 function environment_tensors(env::CTMEnvironment, face::NamedFace)
-    return view(env.cornertensors, face)
+    return [cornertensor(env, edge) for edge in face]
 end
 
 function kikuchi_terms(tn, env::CTMEnvironment)
