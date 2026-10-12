@@ -82,28 +82,17 @@ function face_solve(
     return eigenvalues, right_basis, left_basis
 end
 
-# Writes each corner of `face` and each of its bonds, keeping a bond's index while its dimension
+# Writes the eigenvalues of `face` and each of its bonds, keeping a bond's index while its dimension
 # is unchanged and otherwise naming it from `bondnames`, keyed by face edge, when given.
 function set_face_corners!(env::CTMEnvironment, face, eigenvalues; bondnames = nothing)
-    # Every corner holds the same `m`-th root of the eigenvalues, which keeps each corner's
-    # condition number the `m`-th root of the eigenvalues' instead of concentrating it in one.
-    m = length(face)
-    roots = if all(value -> isreal(value) && real(value) > 0, eigenvalues)
-        real.(eigenvalues) .^ (1 / m)
-    else
-        complex.(eigenvalues) .^ (1 / m)
-    end
-    new_bonds = map(Dictionary(face, face)) do edge
-        old_bond = only(envinds(env, edge))
-        length(old_bond) == length(roots) && return old_bond
-        n = length(roots)
-        return isnothing(bondnames) ? Index(n) : NamedOneTo(n, bondnames[edge])
-    end
+    n = length(eigenvalues)
     for edge in face
-        row, column = new_bonds[edge], new_bonds[nextedge(env.embedding, edge)]
-        env.cornertensors[edge] = diagonal_tensor(roots, row, column)
-        env.envinds[edge] = (new_bonds[edge],)
+        old_bond = only(envinds(env, edge))
+        length(old_bond) == n && continue
+        env.envinds[edge] =
+            (isnothing(bondnames) ? Index(n) : NamedOneTo(n, bondnames[edge]),)
     end
+    env.eigenvalues[face] = eigenvalues
     return env
 end
 
@@ -125,7 +114,7 @@ bond.
 function face_projectors(env::CTMEnvironment, face, transfers, right_basis, left_basis)
     # Every corner of the face is `D = Λ^(1/m)`; the bases are rescaled by `Λ / D` and `1 / D`
     # so that each pass divides by one corner per step.
-    roots = corner_diagonal(env, first(face))
+    roots = corner_roots(env, face)
 
     corners = Dictionary(dst.(face), [cornertensor(env, edge) for edge in face])
 

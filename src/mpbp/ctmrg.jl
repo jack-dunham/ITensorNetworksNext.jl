@@ -35,10 +35,7 @@ function AIE.iterate_diff(env1::CTMEnvironment, env2::CTMEnvironment)
     end
 end
 # Moduli of the eigenvalues of the product of `face`'s corners, which no bond gauge changes.
-# Every corner of a face holds the same diagonal.
-function face_spectrum(env, face)
-    return sort(abs.(corner_diagonal(env, first(face))) .^ length(face))
-end
+face_spectrum(env, face) = sort(abs.(env.eigenvalues[face]))
 
 """
     ctmrg(
