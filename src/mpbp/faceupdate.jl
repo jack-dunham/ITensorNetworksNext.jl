@@ -1,8 +1,8 @@
-using DiagonalArrays: diagview
 using Dictionaries: Dictionary, set!
 using Graphs: degree, dst, src
-using ITensorBase: ITensorBase, Index, NamedOneTo, inds, name, names, state, unnamed
+using ITensorBase: ITensorBase, Index, NamedUnitRange, inds, name, names, state, unnamed
 using LinearAlgebra: inv, norm
+using MatrixAlgebraKit: diagview
 
 function cutinds(tn, env::CTMEnvironment, edge)
     return (linkinds(tn, edge)..., envinds(env, reverse(edge))...)
@@ -82,15 +82,14 @@ function face_solve(
     return eigenvalues, right_basis, left_basis
 end
 
-# Writes the eigenvalues of `face` and each of its bonds, keeping a bond's index while its dimension
+# Writes the eigenvalues of `face` and each of its bonds, keeping a bond's index while its range
 # is unchanged and otherwise naming it from `bondnames`, keyed by face edge, when given.
 function set_face_corners!(env::CTMEnvironment, face, eigenvalues; bondnames = nothing)
-    n = length(eigenvalues)
+    space = only(axes(eigenvalues))
     for edge in face
-        old_bond = only(envinds(env, edge))
-        length(old_bond) == n && continue
+        unnamed(only(envinds(env, edge))) == space && continue
         env.envinds[edge] =
-            (isnothing(bondnames) ? Index(n) : NamedOneTo(n, bondnames[edge]),)
+            (isnothing(bondnames) ? Index(space) : NamedUnitRange(space, bondnames[edge]),)
     end
     env.eigenvalues[face] = eigenvalues
     return env
