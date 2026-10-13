@@ -583,7 +583,8 @@ function bp_gate_split(
     name_v1, name_v2 = names(S)
     sqrt_S = sqrth_safe(S, (name_v1,), (name_v2,); atol = 0, rtol = 0)
     R_U = rename(U * sqrt_S, name_v2 => name_v1)
-    R_V = sqrt_S * V
+    # `V` first: with the `Diagonal` first, TensorAlgebra gives GPU data a host output.
+    R_V = V * sqrt_S
     R_v1, R_v2 = v1_rows ? (R_U, R_V) : (R_V, R_U)
 
     message_v1v2 = operator(
