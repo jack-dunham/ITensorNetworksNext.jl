@@ -1,8 +1,9 @@
 using DiagonalArrays: setdiagindices!
 using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
-using ITensorBase: AbstractNamedTensor, Index, NamedOneTo, unnamed
+using ITensorBase: AbstractNamedTensor, NamedUnitRange, unnamed
 using NamedGraphs: NamedEdge, all_edges
+using TensorAlgebra: trivialrange
 
 # A face's corners are all `Λ^(1/m)` for its eigenvalues `Λ`, so only `Λ` is stored, by face.
 struct CTMEnvironment{V, E <: MessageCache, I}
@@ -63,7 +64,9 @@ function ctm_environment(
     edges = all_edges(tn)
     @assert issetequal(edges, all_edges(embedding.graph))
 
-    bondinds = map(name -> (NamedOneTo(1, name),), Dictionary(bondnames))
+    # Each bond starts as the identity range for fusing the network's link ranges.
+    trivial = trivialrange(unnamed(first(linkinds(tn, first(edges)))))
+    bondinds = map(name -> (NamedUnitRange(trivial, name),), Dictionary(bondnames))
 
     T = eltype(first(messages))
 

@@ -2,8 +2,9 @@ using AlgorithmsInterface: AlgorithmsInterface as AI
 using ITensorBase: AbstractNamedTensor, Index, commoninds, inds, name, names, rename
 using KrylovKit: Arnoldi, eigsolve, schursolve
 using LinearAlgebra: I, cond, diag, norm, ordschur, schur
-using MatrixAlgebraKit: MatrixAlgebraKit, eig_trunc
+using MatrixAlgebraKit: MatrixAlgebraKit, diagview, eig_trunc, svd_compact
 using Random: Xoshiro
+using TensorAlgebra.MatrixAlgebra: pow_diag_safe
 using TensorAlgebra: matricize, unmatricize
 
 @kwdef struct DenseEig <: AbstractAlgorithm
@@ -226,8 +227,8 @@ function aligned(result, reference, alg)
     return align_bases(result..., first(reference), alg.degeneracy_rtol)
 end
 
-# One eigensolve by `alg`, run as a single step; the iterate is the kept
-# `(right_basis, left_basis, eigenvalues)` once the step has run.
+# One eigensolve by `alg`, run as a single step; the iterate is the kept right basis, rows
+# spanning the left invariant subspace, and the eigenvalues.
 struct Eigensolve{Alg <: AbstractAlgorithm} <: AI.Algorithm
     alg::Alg
     stopping_criterion::AI.StopAfterIteration
@@ -238,6 +239,21 @@ Eigensolve(alg::AbstractAlgorithm) = Eigensolve(alg, AI.StopAfterIteration(1))
     iterate = nothing
     iteration::Int = 0
     stopping_criterion_state::StoppingCriterionState
+end
+
+# The solve returns the left rows made dual to the right basis, through the SVD of their overlap,
+# and throws where that overlap is so near-singular that the safe inverse would drop a direction.
+function AI.finalize_state!(
+        ::InvariantSubspaceProblem,
+        ::Eigensolve,
+        state::EigensolveState
+    )
+    right_basis, left_rows, eigenvalues = state.iterate
+    U, S, Vᴴ = svd_compact(left_rows * right_basis)
+    singular_values = diagview(S)
+    minimum(singular_values) > eps(real(eltype(S)))^(3 / 4) * maximum(singular_values) ||
+        error("The left and right invariant subspaces are nearly orthogonal.")
+    return right_basis, Vᴴ' * pow_diag_safe(S, -1) * U' * left_rows, eigenvalues
 end
 
 function AI.initialize_state(
@@ -298,7 +314,7 @@ function AI.step!(
     )
     check_converged(left_info, nkept, alg.maxiter)
     left_rows = transpose(stack(schur_vectors[1:nkept]))
-    state.iterate = (right_basis, (left_rows * right_basis) \ left_rows, values[kept])
+    state.iterate = (right_basis, left_rows, values[kept])
     return state
 end
 
@@ -316,5 +332,5 @@ end
 function dense_subspace(dense, trunc)
     values, right_basis = eig_trunc(dense; trunc)
     left_rows = left_invariant_rows(dense, size(right_basis, 2))
-    return right_basis, (left_rows * right_basis) \ left_rows, diag(values)
+    return right_basis, left_rows, diag(values)
 end
