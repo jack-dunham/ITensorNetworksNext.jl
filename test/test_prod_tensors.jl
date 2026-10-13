@@ -10,7 +10,7 @@ using NamedGraphs: NamedEdge, incident_edges, named_grid
 using OMEinsumContractionOrders: ExhaustiveSearch, GreedyMethod, TreeSA
 using TensorAlgebra: MatricizeContract, TensorOperationsContract
 using TensorOperations: TensorOperations as TO
-using Test: @test, @testset
+using Test: @test, @test_throws, @testset
 
 # Records the arrays it allocates as temporaries and the arrays it is asked to free.
 struct RecordingAllocator
@@ -159,10 +159,17 @@ end
             expected = foldl(*, matrices; init = copy(ψ))
             @test absorb_matrices!(alg, ψ, matrices...) ≈ expected
         end
-        # A wider element type or a non-square matrix takes the allocating method.
-        ψ, m = randn(legs), matrix(ComplexF64, legs[1])
-        @test absorb_matrices!(alg, copy(ψ), m) ≈ ψ * m
-        ψ, m = randn(legs), randn((Index(5), legs[1]))
-        @test absorb_matrices!(alg, copy(ψ), m) ≈ ψ * m
+        # TensorOperations forms the product in place, so it rejects a wider element type or a
+        # non-square matrix.
+        for (ψ, m) in (
+                (randn(legs), matrix(ComplexF64, legs[1])),
+                (randn(legs), randn((Index(5), legs[1]))),
+            )
+            if alg isa TensorOperationsContract
+                @test_throws ArgumentError absorb_matrices!(alg, copy(ψ), m)
+            else
+                @test absorb_matrices!(alg, copy(ψ), m) ≈ ψ * m
+            end
+        end
     end
 end

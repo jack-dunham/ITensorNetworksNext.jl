@@ -1,8 +1,8 @@
 module ITensorNetworksNextTensorOperationsExt
 
-using ITensorBase: ITensor, inds, mulopadd!, names, rename, unnamed
+using ITensorBase: AbstractITensor, ITensor, mulopadd!, names, unnamed
 using ITensorNetworksNext: ITensorNetworksNext
-using TensorAlgebra: TensorOperationsContract
+using TensorAlgebra: TensorOperationsContract, contractadd!
 using TensorOperations: TensorOperations as TO
 
 # The allocator `alg` contracts with, which the intermediates must also come from.
@@ -36,39 +36,110 @@ function ITensorNetworksNext.prod_tensors!(
     return y
 end
 
-# Dense square matrices, both legs on one axis, reuse `t`'s memory and one allocator scratch
-# tensor, freed on return; anything else takes the generic method.
+# The labels after each absorption are worked out here, so that a method for the data's
+# array type sees only arrays and labels.
 function ITensorNetworksNext.absorb_matrices!(
-        alg::TensorOperationsContract, t, matrices...
+        alg::TensorOperationsContract, t::AbstractITensor, matrices::AbstractITensor...
     )
     isempty(matrices) && return t
-    dense = unnamed(t) isa DenseArray
-    square = all(m -> eltype(m) === eltype(t) && allequal(unnamed.(inds(m))), matrices)
-    if !dense || !square
-        return invoke(
-            ITensorNetworksNext.absorb_matrices!, Tuple{Any, Any, Vararg{Any}},
-            alg, t, matrices...
-        )
+
+    labels_dests = accumulate(matrices; init = names(t)) do labels, m
+        shared, added = intersect(names(m), labels), setdiff(names(m), labels)
+        return replace(labels, only(shared) => only(added))
     end
+
+    a = ITensorNetworksNext.absorb_matrices!(
+        alg, unnamed(t), names(t), unnamed.(matrices), names.(matrices), labels_dests
+    )
+    return ITensor(a, last(labels_dests))
+end
+
+# TensorOperations contracts only dense arrays; graded arrays, for example, are read element
+# by element.
+function ITensorNetworksNext.absorb_matrices!(
+        alg::TensorOperationsContract, a::AbstractArray, labels_a,
+        matrices::Tuple, labels_matrices::Tuple, labels_dests::Tuple
+    )
+    throw(
+        ArgumentError(
+            "`absorb_matrices!` with `TensorOperationsContract` needs dense arrays, got " *
+                "$(typeof(a))."
+        )
+    )
+end
+
+function ITensorNetworksNext.check_input(
+        ::typeof(ITensorNetworksNext.absorb_matrices!), alg::TensorOperationsContract,
+        a::DenseArray, matrices::Tuple
+    )
+    for matrix in matrices
+        if !(matrix isa AbstractMatrix)
+            throw(
+                ArgumentError(
+                    "`absorb_matrices!` with `TensorOperationsContract` needs matrices, " *
+                        "got an array of dimension $(ndims(matrix))."
+                )
+            )
+        elseif size(matrix, 1) != size(matrix, 2)
+            throw(
+                ArgumentError(
+                    "`absorb_matrices!` with `TensorOperationsContract` needs square " *
+                        "matrices, got size $(size(matrix))."
+                )
+            )
+        elseif eltype(a) !== eltype(matrix)
+            throw(
+                ArgumentError(
+                    "`absorb_matrices!` with `TensorOperationsContract` needs matrices of " *
+                        "the array's element type $(eltype(a)), got $(eltype(matrix))."
+                )
+            )
+        end
+    end
+    return nothing
+end
+
+# The product is formed in `a`'s memory and one allocator scratch array, freed on return,
+# which needs square matrices of `a`'s element type.
+function ITensorNetworksNext.absorb_matrices!(
+        alg::TensorOperationsContract, a::DenseArray, labels_a,
+        matrices::Tuple, labels_matrices::Tuple, labels_dests::Tuple
+    )
+    ITensorNetworksNext.check_input(ITensorNetworksNext.absorb_matrices!, alg, a, matrices)
 
     allocator = contract_allocator(alg)
     checkpoint = TO.allocator_checkpoint!(allocator)
-    p = (ntuple(identity, ndims(unnamed(t))), ())
-    scratch = TO.tensoralloc_add(eltype(t), unnamed(t), p, false, Val(true), allocator)
-    x, other = t, ITensor(scratch, names(t))
-    for m in matrices
-        shared, added = intersect(names(m), names(x)), setdiff(names(m), names(x))
-        labels = replace(names(x), only(shared) => only(added))
-        y = rename(other, (names(other) .=> labels)...)
-        mulopadd!(y, identity, x, identity, m, true, false; alg)
-        x, other = y, x
+    p = (ntuple(identity, ndims(a)), ())
+    scratch = TO.tensoralloc_add(eltype(a), a, p, false, Val(true), allocator)
+
+    x, other, labels_x = a, scratch, labels_a
+    for (m, labels_m, labels_y) in zip(matrices, labels_matrices, labels_dests)
+        y = other
+
+        # cuTENSOR 2.7 rejects outputs of 2^30 elements whose last extent has no small
+        # factor, so those are written in blocks of the last leg, which `x` or `m` carries.
+        if length(y) < 2^30
+            contractadd!(y, labels_y, x, labels_x, m, labels_m, true, false; alg)
+        else
+            leg, ncols = last(labels_y), size(y, ndims(y))
+            dim_x, dim_m = findfirst(==(leg), labels_x), findfirst(==(leg), labels_m)
+            step = max(1, (2^30 - 1) ÷ (length(y) ÷ ncols))
+
+            for cols in Iterators.partition(1:ncols, step)
+                xb = isnothing(dim_x) ? x : selectdim(x, dim_x, cols)
+                mb = isnothing(dim_m) ? m : selectdim(m, dim_m, cols)
+                yb = selectdim(y, ndims(y), cols)
+                contractadd!(yb, labels_y, xb, labels_x, mb, labels_m, true, false; alg)
+            end
+        end
+
+        x, other, labels_x = y, x, labels_y
     end
-    if isodd(length(matrices))
-        x = copyto!(rename(t, (names(t) .=> names(x))...), x)
-    end
+    isodd(length(matrices)) && copyto!(a, x)
+
     TO.tensorfree!(scratch, allocator)
     TO.allocator_reset!(allocator, checkpoint)
-    return x
+    return a
 end
 
 end
