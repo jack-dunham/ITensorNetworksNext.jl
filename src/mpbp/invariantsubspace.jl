@@ -1,11 +1,12 @@
 using AlgorithmsInterface: AlgorithmsInterface as AI
-using ITensorBase: AbstractNamedTensor, Index, commoninds, inds, name, names, rename
+using ITensorBase:
+    AbstractNamedTensor, Index, commoninds, inds, name, names, rename, unnamed
 using KrylovKit: Arnoldi, eigsolve, schursolve
-using LinearAlgebra: I, cond, diag, norm, ordschur, schur
+using LinearAlgebra: I, cond, diag, inv, norm, ordschur, schur
 using MatrixAlgebraKit: MatrixAlgebraKit, diagview, eig_trunc, svd_compact
 using Random: Xoshiro
 using TensorAlgebra.MatrixAlgebra: pow_diag_safe
-using TensorAlgebra: matricize, unmatricize
+using TensorAlgebra: dual, matricize, unmatricize
 
 @kwdef struct DenseEig <: AbstractAlgorithm
     rtol::Float64 = 1.0e-12
@@ -114,7 +115,7 @@ end
 
 # Rows spanning the left invariant subspace of `matrix` for its `nkept` eigenvalues of largest
 # modulus, from an ordered Schur form, so that no eigenvectors of the discarded ones enter.
-function left_invariant_rows(matrix, nkept)
+function left_invariant_rows(matrix, nkept::Integer)
     decomposition = schur(Matrix(transpose(matrix)))
     moduli = sort(abs.(decomposition.values); rev = true)
     threshold = if nkept < length(moduli)
@@ -125,6 +126,7 @@ function left_invariant_rows(matrix, nkept)
     decomposition = ordschur(decomposition, abs.(decomposition.values) .> threshold)
     return transpose(decomposition.Z[:, 1:nkept])
 end
+left_invariant_rows(matrix, right_basis) = left_invariant_rows(matrix, size(right_basis, 2))
 
 # `left * right` as a matrix. Named bases keep their kept index first in `left` and last in
 # `right`, and the matrix runs over those two.
@@ -133,28 +135,38 @@ function overlap_matrix(left::AbstractNamedTensor, right::AbstractNamedTensor)
     return matricize(left * right, (first(inds(left)),), (last(inds(right)),))
 end
 
-# `(right * transform, transform \ left)`, with `transform` acting on the bases' kept index.
-function transformed(right::AbstractMatrix, left::AbstractMatrix, transform)
-    return (right * transform, transform \ left)
+# `(right * transform, inverse * left)`, with `transform` acting on the bases' kept index.
+function transformed(right::AbstractMatrix, left::AbstractMatrix, transform, inverse)
+    return (right * transform, inverse * left)
 end
-function transformed(right::AbstractNamedTensor, left::AbstractNamedTensor, transform)
-    old, new = last(inds(right)), Index(size(transform, 2))
+function transformed(
+        right::AbstractNamedTensor, left::AbstractNamedTensor, transform, inverse
+    )
+    old, new = dual(last(inds(right))), Index(dual(axes(transform, 2)))
     return right * unmatricize(transform, (old,), (new,)),
-        unmatricize(inv(transform), (new,), (old,)) * left
+        unmatricize(inverse, (new,), (old,)) * left
 end
 
 # Matches each new eigenvector to the previous basis vector it overlaps most, then rotates the
 # bases onto `previous` within blocks of equal eigenvalues, which leaves the corners diagonal.
 function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_rtol)
-    size(previous) == size(right_basis) || return right_basis, left_basis, eigenvalues
+    unnamed(last(inds(previous))) == unnamed(last(inds(right_basis))) ||
+        return right_basis, left_basis, eigenvalues
     overlaps = overlap_matrix(left_basis, previous)
+    transform, inverse, eigenvalues = alignment(overlaps, eigenvalues, degeneracy_rtol)
+    return transformed(right_basis, left_basis, transform, inverse)..., eigenvalues
+end
+
+# The transform `align_bases` applies, given the overlaps of the new left basis with the previous
+# right basis, together with its inverse and the eigenvalues in the transformed order.
+function alignment(overlaps, eigenvalues, degeneracy_rtol)
     order = Int[]
     for column in axes(overlaps, 2)
         candidates = setdiff(axes(overlaps, 1), order)
         push!(order, candidates[argmax(abs.(overlaps[candidates, column]))])
     end
     eigenvalues = eigenvalues[order]
-    permutation = Matrix{Float64}(I, length(order), length(order))[:, order]
+    permutation = Matrix{eltype(overlaps)}(I, length(order), length(order))[:, order]
 
     # The overlap of the permuted bases with `previous`.
     rotation = overlaps[order, :]
@@ -166,7 +178,7 @@ function align_bases(right_basis, left_basis, eigenvalues, previous, degeneracy_
     end
     # A near-singular rotation means the subspace has moved; aligning onto it would amplify noise.
     transform = cond(rotation) < 1.0e8 ? permutation * rotation : permutation
-    return transformed(right_basis, left_basis, transform)..., eigenvalues
+    return transform, inv(transform), eigenvalues
 end
 
 """
@@ -204,10 +216,11 @@ end
 
 # The matrix bases of `result` as named tensors over `cut`, aligned onto `reference`.
 function named_subspace((right_basis, left_basis, eigenvalues), cut, alg, reference)
-    k = Index(length(eigenvalues))
+    k = Index(only(axes(eigenvalues)))
+    # The matrices' rows run over the legs `cut` contracts with, whose axes are dual to its own.
     result = (
-        unmatricize(right_basis, cut, (k,)),
-        unmatricize(left_basis, (k,), cut),
+        unmatricize(right_basis, dual.(cut), (k,)),
+        unmatricize(left_basis, (k,), dual.(cut)),
         eigenvalues,
     )
     return aligned(result, usable_reference(reference, cut), alg)
@@ -272,7 +285,7 @@ function AI.step!(
         state::EigensolveState
     )
     (; matrix, maxdim) = problem
-    state.iterate = dense_subspace(Matrix(matrix), KeepDominant(algorithm.alg, maxdim))
+    state.iterate = dense_subspace(matrix, KeepDominant(algorithm.alg, maxdim))
     return state
 end
 
@@ -328,9 +341,9 @@ function check_converged(info, howmany, maxiter)
     return nothing
 end
 
-# The dominant invariant subspace of the dense matrix `dense`, truncated by `trunc`.
-function dense_subspace(dense, trunc)
-    values, right_basis = eig_trunc(dense; trunc)
-    left_rows = left_invariant_rows(dense, size(right_basis, 2))
+# The dominant invariant subspace of `matrix` from its full eigendecomposition, truncated by `trunc`.
+function dense_subspace(matrix, trunc)
+    values, right_basis = eig_trunc(matrix; trunc)
+    left_rows = left_invariant_rows(matrix, right_basis)
     return right_basis, left_rows, diag(values)
 end
