@@ -1,12 +1,14 @@
+using GradedArrays: GradedArray, SU2, U1, dual, fU1, gradedrange
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, IndexName, NamedTensor, align, inds, name, unnamed
 using ITensorNetworksNext.ITensorNetworkGenerators: ising_network
 using ITensorNetworksNext: CornerTransferProduct, DenseEig, Greedy, ITensorNetwork,
     KrylovEig, beliefpropagation, bethe_free_entropy, ctm_environment, ctmrg, envinds,
-    expect, face_update!, flatten_network, hexagonal_position, invariant_subspace, leftface,
-    linkinds, nextedge, normnetwork, planar_embedding, prevedge, prod_tensors,
-    tensornetwork, vertex_scalar
-using LinearAlgebra: Diagonal, I, inv, norm
+    expect, face_solve, face_update!, flatten_network, hexagonal_position,
+    invariant_subspace, leftface, linkinds, nextedge, normnetwork, planar_embedding,
+    prevedge, prod_tensors, tensornetwork, vertex_scalar
+using LinearAlgebra: Diagonal, I, diag, inv, norm
+using MatrixAlgebraKit: diagonal
 using NamedGraphs: all_edges, incident_edges, named_grid, named_hexagonal_lattice_graph
 using StableRNGs: StableRNG
 using TensorAlgebra: matricize, unmatricize
@@ -92,6 +94,42 @@ const LATTICES = (
         end
         # The dominant eigenvalues are a complex-conjugate pair.
         @test_throws ArgumentError invariant_subspace(KrylovEig(), product, 1)
+    end
+
+    @testset "`face_solve` on graded transfer tensors ($label)" for (label, r) in (
+            "U1" => gradedrange([U1(0) => 2, U1(1) => 3, U1(-1) => 2]),
+            "fU1" => gradedrange([fU1(0) => 2, fU1(1) => 3, fU1(-1) => 2]),
+            "SU2" => gradedrange([SU2(0) => 2, SU2(1 // 2) => 2, SU2(1) => 1]),
+        )
+        rng = StableRNG(1)
+        links = [Index(r) for _ in 1:3]
+        transfers = [randn(rng, (links[i], dual(links[mod1(i + 1, end)]))) for i in 1:3]
+        product = CornerTransferProduct(transfers)
+        Λ = Matrix(product)
+        for maxdim in (2, 4, 6)
+            λ, right_basis, left_basis = face_solve(transfers; maxdim, alg = DenseEig())
+            @test unnamed(right_basis) isa GradedArray
+            @test unnamed(left_basis) isa GradedArray
+            k = last(inds(right_basis))
+            VR = matricize(right_basis, product.cut, (k,))
+            VL = matricize(left_basis, (k,), product.cut)
+            D = diagonal(λ)
+            # The dense solve keeps the same number of dimensions, counting each multiplet's copies.
+            _, _, dense_λ = invariant_subspace(DenseEig(), Array(Λ), maxdim)
+            @test sort(abs.(diag(Array(D)))) ≈ sort(abs.(dense_λ))
+            @test Array(Λ * VR) ≈ Array(VR * D)
+            @test Array(VL * Λ) ≈ Array(D * VL)
+            @test Array(VL * VR) ≈ I
+
+            # Solving again aligns the bases onto a rescaled copy of themselves.
+            _, right_again, left_again = face_solve(
+                transfers; maxdim, alg = DenseEig(),
+                reference = (2 * right_basis, left_basis / 2)
+            )
+            k_again = last(inds(right_again))
+            @test Array(matricize(right_again, product.cut, (k_again,))) ≈ 2 * Array(VR)
+            @test Array(matricize(left_again, (k_again,), product.cut)) ≈ Array(VL) / 2
+        end
     end
 
     function run_sweeps!(env, tn; maxdim, nsweeps)
