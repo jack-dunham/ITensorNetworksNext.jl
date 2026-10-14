@@ -1,3 +1,4 @@
+using Dictionaries: Dictionary
 using GradedArrays: GradedArray, SU2, U1, dual, fU1, gradedrange
 using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, IndexName, NamedTensor, align, inds, name, unnamed
@@ -43,6 +44,12 @@ end
 const LATTICES = (
     ("grid", named_grid((4, 4)), v -> v),
     ("hexagonal", named_hexagonal_lattice_graph(2, 2), hexagonal_position),
+)
+
+const GRADED_LINKS = (
+    "U1" => gradedrange([U1(0) => 2, U1(1) => 1, U1(-1) => 1]),
+    "fU1" => gradedrange([fU1(0) => 2, fU1(1) => 1, fU1(-1) => 1]),
+    "SU2" => gradedrange([SU2(0) => 1, SU2(1 // 2) => 1]),
 )
 
 @testset "MP-BP" begin
@@ -154,6 +161,26 @@ const LATTICES = (
         env = run_sweeps!(bp_environment(tn, g, emb), tn; maxdim = 16, nsweeps = 30)
         z_exact = prod_tensors(tn, Greedy())[]
         @test exp(bethe_free_entropy(tn, env)) ≈ z_exact rtol = 1.0e-10
+    end
+
+    @testset "Face update reaches the exact Z on graded tensors ($label)" for (label, r) in
+        GRADED_LINKS
+
+        for dims in ((2, 2), (3, 3))
+            g = named_grid(dims)
+            l = Dict(e => Index(r) for e in edges(g))
+            l = merge(l, Dict(reverse(e) => dual(l[e]) for e in edges(g)))
+            rng = StableRNG(1)
+            tn = tensornetwork(vertices(g)) do v
+                return randn(rng, Tuple(map(e -> l[e], incident_edges(g, v))))
+            end
+            messages =
+                Dictionary(Dict(e => ones(Tuple(linkinds(tn, e))) for e in all_edges(g)))
+            env = ctm_environment(tn, planar_embedding(g, v -> v), messages)
+            env = run_sweeps!(env, tn; maxdim = 16, nsweeps = 30)
+            z_exact = prod_tensors(tn, Greedy())[]
+            @test exp(bethe_free_entropy(tn, env)) ≈ z_exact rtol = 1.0e-10
+        end
     end
 
     @testset "Converged Z_B is stationary under perturbations" begin

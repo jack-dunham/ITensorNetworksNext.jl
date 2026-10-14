@@ -1,9 +1,13 @@
 module ITensorNetworksNextGradedArraysExt
 
-using GradedArrays:
-    FusedGradedMatrix, FusedGradedVector, dual, fusedgradedmatrix, sectordata, sectors
-using ITensorNetworksNext: ITensorNetworksNext, KeepDominant, alignment, left_invariant_rows
+using GradedArrays: AbstractGradedOneTo, FusedGradedMatrix, FusedGradedVector, dual,
+    fusedgradedmatrix, isdual, sectordata, sectors
+using ITensorBase: NamedUnitRange, unnamed
+using ITensorNetworksNext:
+    ITensorNetworksNext, KeepDominant, alignment, diagonal_tensor, left_invariant_rows
+using LinearAlgebra: Diagonal
 using MatrixAlgebraKit: MatrixAlgebraKit, findtruncated
+using TensorAlgebra: unmatricize
 
 # Each value is repeated by its sector's quantum dimension, so `maxdim` counts kept dimensions and
 # the copies of one value, being equal, are never split; the kept values are returned per sector.
@@ -47,6 +51,24 @@ function ITensorNetworksNext.alignment(
         copyto!(sectordata(aligned)[sector], part[3])
     end
     return transform, inverse, aligned
+end
+
+# A diagonal map runs from its dual index to its non-dual one; the diagonal is unchanged by the swap.
+function ITensorNetworksNext.diagonal_tensor(diagonal::FusedGradedVector, row, column)
+    isdual(unnamed(row)) && return diagonal_tensor(diagonal, column, row)
+    blocks = [
+        sector => Matrix(Diagonal(block)) for
+            (sector, block) in pairs(sectordata(diagonal))
+    ]
+    matrix = fusedgradedmatrix(blocks, unnamed(row), dual(unnamed(column)))
+    return unmatricize(matrix, (row,), (dual(column),))
+end
+# A dense diagonal on graded bonds, such as the eigenvalues of a face not yet solved.
+function ITensorNetworksNext.diagonal_tensor(
+        diagonal::Vector, row::NamedUnitRange{<:Any, <:Any, <:AbstractGradedOneTo}, column
+    )
+    space = isdual(unnamed(row)) ? unnamed(column) : unnamed(row)
+    return diagonal_tensor(FusedGradedVector(diagonal, space), row, column)
 end
 
 end
