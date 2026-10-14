@@ -3,7 +3,7 @@ using Dictionaries: Dictionary
 using Graphs: dst, edges, neighbors, vertices
 using ITensorBase: AbstractNamedTensor, NamedUnitRange, unnamed
 using NamedGraphs: NamedEdge, all_edges
-using TensorAlgebra: trivialrange
+using TensorAlgebra: dual, trivialrange
 
 # A face's corners are all `Λ^(1/m)` for its eigenvalues `Λ`, so only `Λ` is stored, by face.
 struct CTMEnvironment{V, E <: MessageCache, I}
@@ -16,11 +16,15 @@ end
 
 edgetensor(env::CTMEnvironment, edge) = env.edgetensors[NamedEdge(edge)]
 
-# The corner `c[edge]`, between the bonds on `edge` and on `nextedge(edge)`. Corners of the outer
-# face are 1.
-function cornertensor(env::CTMEnvironment, edge)
+# The corner `c[edge]`, between the bonds on `edge` and on `nextedge(edge)`, the latter dual so
+# that the corner maps its face's bond space to itself. Corners of the outer face are 1. With
+# `dualbonds`, both bonds are dual, as an edge tensor sharing them holds them.
+function cornertensor(env::CTMEnvironment, edge; dualbonds = false)
     row = only(envinds(env, edge))
-    column = only(envinds(env, nextedge(env.embedding, edge)))
+    column = dual(only(envinds(env, nextedge(env.embedding, edge))))
+    if dualbonds
+        row, column = dual(row), dual(column)
+    end
     face = leftface(env.embedding, edge)
     isnothing(face) && return ones((row, column))
     return diagonal_tensor(corner_roots(env, face), row, column)
@@ -39,9 +43,10 @@ end
 # keep each corner's condition number the `m`-th root of the eigenvalues'.
 function corner_roots(env::CTMEnvironment, face)
     eigenvalues, m = env.eigenvalues[face], length(face)
-    all(value -> isreal(value) && real(value) > 0, eigenvalues) &&
-        return real.(eigenvalues) .^ (1 / m)
-    return complex.(eigenvalues) .^ (1 / m)
+    iszero(maximum(value -> abs(imag(value)), eigenvalues)) &&
+        minimum(real, eigenvalues) > 0 &&
+        return map(value -> real(value)^(1 / m), eigenvalues)
+    return map(value -> complex(value)^(1 / m), eigenvalues)
 end
 
 function Base.copy(env::CTMEnvironment)
@@ -66,14 +71,18 @@ function ctm_environment(
 
     # Each bond starts as the identity range for fusing the network's link ranges.
     trivial = trivialrange(unnamed(first(linkinds(tn, first(edges)))))
-    bondinds = map(name -> (NamedUnitRange(trivial, name),), Dictionary(bondnames))
+    # A bond's range type may change when its face is solved, as from graded to fused graded.
+    names = Dictionary(bondnames)
+    bondinds = Dictionary{keytype(names), Tuple{NamedUnitRange}}(
+        keys(names), [(NamedUnitRange(trivial, name),) for name in names]
+    )
 
     T = eltype(first(messages))
 
     edgetensors = messagecache(edges) do edge
         return messages[edge] *
             ones(T, bondinds[nextedge(embedding, edge)]) *
-            ones(T, bondinds[prevedge(embedding, reverse(edge))])
+            ones(T, dual.(bondinds[prevedge(embedding, reverse(edge))]))
     end
     eigenvalues = Dict{eltype(embedding.faces), AbstractVector}(
         face => ones(T, 1) for face in embedding.faces
