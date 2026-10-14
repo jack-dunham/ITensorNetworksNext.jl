@@ -1,8 +1,8 @@
 using Dictionaries: Dictionary, set!
 using Graphs: degree, dst, src
 using ITensorBase: ITensorBase, Index, NamedUnitRange, inds, name, names, state, unnamed
-using LinearAlgebra: inv, norm
-using MatrixAlgebraKit: diagview
+using LinearAlgebra: diag, inv, norm
+using TensorAlgebra: dual, matricize
 
 function cutinds(tn, env::CTMEnvironment, edge)
     return (linkinds(tn, edge)..., envinds(env, reverse(edge))...)
@@ -19,7 +19,7 @@ function corner_transfer_matrix(tn, env::CTMEnvironment, outgoing)
 
     # At a vertex of degree 2 nothing else carries the far face's bonds, so its corner supplies them.
     if degree(env.embedding.graph, vertex) == 2
-        transfer = transfer * cornertensor(env, reverse(outgoing))
+        transfer = transfer * cornertensor(env, reverse(outgoing); dualbonds = true)
     end
 
     # A fixed leg order, the incoming cut then the outgoing one, lets `CornerTransferProduct` read
@@ -50,10 +50,12 @@ function propagate_projector(cycle, transfers, corners, projector)
     return projectors
 end
 
-# Inverse of a diagonal two-index `tensor`, such as a corner, as a map between its indices.
+# Inverse of a diagonal two-index `tensor`, such as a corner. As the inverse map, it runs over the
+# duals of the tensor's indices.
 function diaginv(tensor)
     row, column = inds(tensor)
-    return diagonal_tensor(inv.(diagview(unnamed(tensor))), row, column)
+    diagonal = diag(matricize(unnamed(tensor), (1,), (2,)))
+    return diagonal_tensor(map(inv, diagonal), dual(row), dual(column))
 end
 
 """
@@ -124,9 +126,10 @@ function face_projectors(env::CTMEnvironment, face, transfers, right_basis, left
     right_bond = only(envinds(env, prevedge(env.embedding, start)))
     left_bond = only(envinds(env, nextedge(env.embedding, start)))
 
+    right_scaling = map(root -> root^(length(face) - 1), roots)
     right_projector =
-        right_basis * diagonal_tensor(roots .^ (length(face) - 1), k, right_bond)
-    left_projector = left_basis * diagonal_tensor(inv.(roots), k, left_bond)
+        right_basis * diagonal_tensor(right_scaling, dual(k), dual(right_bond))
+    left_projector = left_basis * diagonal_tensor(map(inv, roots), k, left_bond)
 
     right_projectors =
         propagate_projector(rightcycle(face), transfers, corners, right_projector)
