@@ -6,7 +6,7 @@ using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTe
     NamedTensorOperator, apply, inputinds, inputnames, mulopadd!, name, names,
     nametype, operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
-using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, qr_compact!, svd_trunc
+using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact!, svd_trunc
 using NamedGraphs: boundary_edges, vertextype
 using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_safe
 using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
@@ -48,8 +48,7 @@ end
 # === Top-level user entry point ===
 
 """
-    apply_operators(operators, state, env; alg=nothing, vertices=nothing, kwargs...)
-        -> (state, env)
+    apply_operators(operators, state, env; alg=nothing, kwargs...) -> (state, env)
 
 Apply each operator in `operators` (a sequence of single-tensor or two-tensor
 operators) to `state` in turn, updating `env` to reflect each application.
@@ -61,35 +60,28 @@ the operators applied. `kwargs` are forwarded to the per-operator algorithm
 (forwarded to the SVD that splits a two-site gate back into single-site
 tensors) and `normalize`.
 
-`vertices` holds one vertex list per operator, the vertices of `state` that operator acts
-on. By default each list is the operator's [`operator_support`](@ref) in `state`, and an
-`ArgumentError` is thrown if an input name of an operator is on no tensor of `state`.
+An `ArgumentError` is thrown if an input name of an operator is on no tensor of `state`.
 
 See also [`apply_operator`](@ref), [`apply_operators!`](@ref).
 """
-function apply_operators(
-        operators, state, env; alg = nothing, vertices = nothing, kwargs...
-    )
+function apply_operators(operators, state, env; alg = nothing, kwargs...)
     algorithm = select_algorithm(
         apply_operators, alg, (operators, state, env); kwargs...
     )
-    return apply_operators(algorithm, operators, state, env; vertices)
+    return apply_operators(algorithm, operators, state, env)
 end
 
 """
-    apply_operators!(operators, state, env; alg=nothing, vertices=nothing, kwargs...)
-        -> (state, env)
+    apply_operators!(operators, state, env; alg=nothing, kwargs...) -> (state, env)
 
 [`apply_operators`](@ref) without copying: the tensors of `state` are overwritten and `env`
 is updated in place, so `state` must not be used afterwards except through the result.
 """
-function apply_operators!(
-        operators, state, env; alg = nothing, vertices = nothing, kwargs...
-    )
+function apply_operators!(operators, state, env; alg = nothing, kwargs...)
     algorithm = select_algorithm(
         apply_operators, alg, (operators, state, env); kwargs...
     )
-    return apply_operators!(algorithm, operators, state, env; vertices)
+    return apply_operators!(algorithm, operators, state, env)
 end
 
 # The `apply_operators` iteration algorithm wraps the per-operator algorithm,
@@ -118,44 +110,30 @@ function default_algorithm(
     )
 end
 
-function apply_operators(algorithm, operators, state, env; vertices = nothing)
+function apply_operators(algorithm, operators, state, env)
     dest = copy(state)
     for v in Graphs.vertices(dest)
         isassigned(dest, v) || continue
         dest[v] = copy(dest[v])
     end
-    return apply_operators!(algorithm, operators, dest, copy(env); vertices)
+    return apply_operators!(algorithm, operators, dest, copy(env))
 end
 
-function apply_operators!(algorithm, operators, state, env; vertices = nothing)
+function apply_operators!(algorithm, operators, state, env)
     isempty(operators) && return state, env
-    if isnothing(vertices)
-        vertices = map(operators) do op
-            for name in inputnames(op)
-                has_dimname(state, name) || throw(
-                    ArgumentError(
-                        "operator input `$name` is not on any tensor of the network"
-                    )
-                )
-            end
-            return operator_support(state, op)
-        end
-    elseif length(vertices) != length(operators)
-        throw(
-            ArgumentError(
-                "got $(length(vertices)) vertex lists for $(length(operators)) operators"
-            )
+    for op in operators, name in inputnames(op)
+        has_dimname(state, name) || throw(
+            ArgumentError("operator input `$name` is not on any tensor of the network")
         )
     end
-    problem = ApplyOperatorsProblem(; operators, vertices, init = state)
+    problem = ApplyOperatorsProblem(; operators, init = state)
     return AI.solve(problem, algorithm; iterate = state, env)
 end
 
 # === Layer 1: apply_operators iteration ===
 
-@kwdef struct ApplyOperatorsProblem{Ops, Vertices, Init} <: AI.Problem
+@kwdef struct ApplyOperatorsProblem{Ops, Init} <: AI.Problem
     operators::Ops
-    vertices::Vertices
     init::Init
 end
 
@@ -205,7 +183,7 @@ function AI.step!(
     )
     apply_operator!(
         algorithm.operator_algorithm, state.iterate, problem.operators[state.iteration],
-        state.iterate, state.env; vertices = problem.vertices[state.iteration]
+        state.iterate, state.env
     )
     return state
 end
@@ -267,7 +245,7 @@ end
 function BeliefPropagationEnvironmentPreparation(
         network, env; when = StopWhenVertexRevisited(), kwargs...
     )
-    factors = NormNetwork(network, branamemap(env))
+    factors = normnetwork(network, branamemap(env))
     algorithm = beliefpropagation_algorithm(factors, MessageCache(env); kwargs...)
     return BeliefPropagationEnvironmentPreparation(when, algorithm)
 end
@@ -337,7 +315,7 @@ function update_environment(
         environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
         state
     )
-    bp_problem = BeliefPropagationProblem(NormNetwork(state.iterate, branamemap(state.env)))
+    bp_problem = BeliefPropagationProblem(normnetwork(state.iterate, branamemap(state.env)))
     return AI.solve(
         bp_problem, environment_algorithm.algorithm; iterate = MessageCache(state.env)
     )
@@ -348,7 +326,7 @@ end
 
 Stopping criterion for [`BeliefPropagationEnvironmentPreparation`](@ref), met when the next
 operator acts on two vertices and one of them was updated since belief propagation last
-ran. The vertices of each operator are read from the problem's `vertices`.
+ran. The vertices of each operator are its [`operator_support`](@ref) in the network.
 """
 struct StopWhenVertexRevisited <: AI.StoppingCriterion end
 
@@ -375,7 +353,7 @@ function AI.is_finished(
         state::BeliefPropagationEnvironmentPreparationState, ::StopWhenVertexRevisited,
         st::StopWhenVertexRevisitedState
     )
-    vertices = problem.vertices[state.operator_index]
+    vertices = operator_support(state.iterate, problem.operators[state.operator_index])
     return length(vertices) == 2 && any(in(st.updated), vertices)
 end
 
@@ -387,7 +365,8 @@ function AI.is_finished!(
         st::StopWhenVertexRevisitedState
     )
     if state.iteration > 0
-        union!(st.updated, problem.vertices[state.operator_index - 1])
+        previous = problem.operators[state.operator_index - 1]
+        union!(st.updated, operator_support(state.iterate, previous))
     end
     return AI.is_finished(problem, algorithm, state, c, st)
 end
@@ -432,11 +411,14 @@ end
 # === Default strategy: BPApplyGate ===
 
 """
-    SimpleBPGateUpdate()
+    SimpleBPGateUpdate(; contract_alg = nothing)
 
-The gate stages of [`BPApplyGate`](@ref) that allocate a new tensor at every step.
+The gate stages of [`BPApplyGate`](@ref), absorbing the message roots with
+[`absorb_matrices!`](@ref) under `contract_alg`.
 """
-struct SimpleBPGateUpdate end
+@kwdef struct SimpleBPGateUpdate{ContractAlg}
+    contract_alg::ContractAlg = nothing
+end
 
 @kwdef struct BPApplyGate{Trunc, Subalgorithm} <: ApplyOperatorAlgorithm
     trunc::Trunc = nothing
@@ -535,11 +517,13 @@ The data of `state[v]` may be overwritten.
 `w` need not be a vertex of `state`: the bond is identified as the name `state[v]`
 shares with `env[w => v]`.
 """
-function bp_gate_factorize!(::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w)
+function bp_gate_factorize!(
+        subalgorithm::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w
+    )
     roots = [message_gauge(m) for m in incoming_messages(env, v => w)]
-    ψ = foldl((ψ, (x, _)) -> x * ψ, roots; init = state[v])
+    ψ = absorb_matrices!(subalgorithm.contract_alg, state[v], first.(roots)...)
     bondname = only(intersect(names(state[v]), names(env[w => v])))
-    Q, R = qr_compact(ψ, setdiff(names(ψ), [bondname], names(op)))
+    Q, R = qr_compact!(ψ, setdiff(names(ψ), [bondname], names(op)))
     return Q, R, last.(roots)
 end
 
@@ -578,7 +562,8 @@ function bp_gate_split(
     name_v1, name_v2 = names(S)
     sqrt_S = sqrth_safe(S, (name_v1,), (name_v2,); atol = 0, rtol = 0)
     R_U = rename(U * sqrt_S, name_v2 => name_v1)
-    R_V = sqrt_S * V
+    # `V` first: with the `Diagonal` first, TensorAlgebra gives GPU data a host output.
+    R_V = V * sqrt_S
     R_v1, R_v2 = v1_rows ? (R_U, R_V) : (R_V, R_U)
 
     message_v1v2 = operator(
@@ -597,7 +582,8 @@ The vertex tensor `Q * R` with the gauge of [`bp_gate_factorize!`](@ref) undone 
 contracting `inverse_roots`. The data of `Q` may be overwritten.
 """
 function bp_gate_restore!(
-        ::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor, inverse_roots
+        subalgorithm::SimpleBPGateUpdate, Q::AbstractITensor, R::AbstractITensor,
+        inverse_roots
     )
-    return foldl((ψ, y) -> y * ψ, inverse_roots; init = Q * R)
+    return absorb_matrices!(subalgorithm.contract_alg, Q, inverse_roots...) * R
 end

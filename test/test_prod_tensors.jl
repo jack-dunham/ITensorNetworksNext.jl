@@ -1,10 +1,13 @@
 using Graphs: edges, vertices
-using ITensorBase: Index, NamedTensorOperator, inputnames, operator, outputnames, state
-using ITensorNetworksNext:
-    Greedy, ITensorNetwork, linkinds, prod_tensors, siteinds, tensornetwork
+using ITensorBase: Index, NamedTensorOperator, inputnames, name, operator, outputnames,
+    setname, state, uniquename
+using ITensorNetworksNext: Greedy, ITensorNetwork, absorb_matrices!, linkinds, prod_tensors,
+    siteinds, tensornetwork
 using NamedGraphs: incident_edges, named_grid
 using OMEinsumContractionOrders: ExhaustiveSearch, GreedyMethod, TreeSA
-using Test: @test, @testset
+using TensorAlgebra: MatricizeContract, TensorOperationsContract
+using TensorOperations: TensorOperations as TO
+using Test: @test, @test_throws, @testset
 
 @testset "prod_tensors" begin
     @testset "Contract Vectors of ITensors" begin
@@ -87,5 +90,31 @@ using Test: @test, @testset
         rb = prod_tensors([op, u, w])
         @test outputnames(rb) == outputnames((op * u) * w) == outputnames(op * (u * w))
         @test inputnames(rb) == inputnames((op * u) * w) == inputnames(op * (u * w))
+    end
+
+    @testset "absorb_matrices! matches * ($alg)" for alg in (
+            MatricizeContract(), TensorOperationsContract(),
+            TensorOperationsContract(; allocator = TO.BufferAllocator()),
+        )
+        legs = Index.((2, 3, 4))
+        matrix(elt, i) = randn(elt, (setname(i, uniquename(name(i))), i))
+        for n in 0:3
+            ψ = randn(legs)
+            matrices = [matrix(Float64, legs[k]) for k in 1:n]
+            expected = foldl(*, matrices; init = copy(ψ))
+            @test absorb_matrices!(alg, ψ, matrices...) ≈ expected
+        end
+        # TensorOperations forms the product in place, so it rejects a wider element type or a
+        # non-square matrix.
+        for (ψ, m) in (
+                (randn(legs), matrix(ComplexF64, legs[1])),
+                (randn(legs), randn((Index(5), legs[1]))),
+            )
+            if alg isa TensorOperationsContract
+                @test_throws ArgumentError absorb_matrices!(alg, copy(ψ), m)
+            else
+                @test absorb_matrices!(alg, copy(ψ), m) ≈ ψ * m
+            end
+        end
     end
 end
