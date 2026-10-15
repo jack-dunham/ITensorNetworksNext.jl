@@ -245,7 +245,7 @@ end
 function BeliefPropagationEnvironmentPreparation(
         network, env; when = StopWhenVertexRevisited(), kwargs...
     )
-    factors = NormNetwork(network, branamemap(env))
+    factors = normnetwork(network, branamemap(env))
     algorithm = beliefpropagation_algorithm(factors, MessageCache(env); kwargs...)
     return BeliefPropagationEnvironmentPreparation(when, algorithm)
 end
@@ -315,7 +315,7 @@ function update_environment(
         environment_algorithm::BeliefPropagationEnvironmentPreparation, problem, algorithm,
         state
     )
-    bp_problem = BeliefPropagationProblem(NormNetwork(state.iterate, branamemap(state.env)))
+    bp_problem = BeliefPropagationProblem(normnetwork(state.iterate, branamemap(state.env)))
     return AI.solve(
         bp_problem, environment_algorithm.algorithm; iterate = MessageCache(state.env)
     )
