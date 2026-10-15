@@ -121,6 +121,7 @@ end
 function apply_operators(algorithm, operators, state, env; vertices = nothing)
     dest = copy(state)
     for v in Graphs.vertices(dest)
+        isassigned(dest, v) || continue
         dest[v] = copy(dest[v])
     end
     return apply_operators!(algorithm, operators, dest, copy(env); vertices)
