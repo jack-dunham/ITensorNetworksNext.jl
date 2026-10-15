@@ -1,5 +1,5 @@
-using Dictionaries: Dictionary, Indices, getindices
-using ITensorBase: inputnames, outputnames, rename, state, uniquename
+using Dictionaries: Dictionary, Indices
+using ITensorBase: inputnames, outputnames, rename, state
 using ITensorNetworksNext
 
 """
@@ -24,37 +24,56 @@ struct QuadraticFormNetwork{T, V, I, O <: ITensorNetworkOperator} <:
             operator::ITensorNetworkOperator,
             map::Dictionary{I, I}
         ) where {T, V, I}
-        if !issetequal(vertices(operator), vertices(ket))
-            error("the operator layer must be defined on every vertex of the ket layer.")
-        end
-        if !issubset(inputnames(operator), keys(ket.dimname_vertices))
-            error("every operator input name must be an index name of the ket layer.")
-        end
-        names_bra = union(
-            linknames(ket), inputnames(operator),
-            filter(in(keys(map)), keys(ket.dimname_vertices))
-        )
-        braname = getindices(map, Indices{I}(names_bra))
-        return new{T, V, I, typeof(operator)}(ket, operator, braname)
+        check_input(QuadraticFormNetwork, ket, operator, map)
+        return new{T, V, I, typeof(operator)}(ket, operator, map)
     end
+end
+
+function QuadraticFormNetwork(
+        f::Function,
+        ket::ITensorNetwork,
+        operator::ITensorNetworkOperator,
+        linknames = ITensorNetworksNext.linknames(ket)
+    )
+    names = union(linknames, inputnames(operator))
+    return QuadraticFormNetwork(ket, operator, narrow_map(f, Indices(names)))
+end
+function QuadraticFormNetwork(
+        ket::ITensorNetwork,
+        operator::ITensorNetworkOperator,
+        linknames = ITensorNetworksNext.linknames(ket)
+    )
+    return QuadraticFormNetwork(name -> derivedname(name, "bra"), ket, operator, linknames)
+end
+
+function check_input(::Type{<:QuadraticFormNetwork}, ket, operator, braname)
+    if !issetequal(vertices(operator), vertices(ket))
+        error("the operator layer must be defined on every vertex of the ket layer.")
+    end
+    if !issubset(inputnames(operator), keys(ket.dimname_vertices))
+        error("every operator input name must be an index name of the ket layer.")
+    end
+    if !issubset(inputnames(operator), keys(braname))
+        error("every operator input name must have a bra name.")
+    end
+    return check_branamemap(ket, braname, state(operator))
 end
 
 function Base.eltype(::Type{<:QuadraticFormNetwork})
     return error(
-        "`eltype` of a `QuadraticFormNetwork` is not defined, since the triple-layer tensor at a vertex has no representation of its own. Use `kettensor`, `operatortensor` and `bratensor` to reach the individual layers."
+        "`eltype` of a `QuadraticFormNetwork` is not defined, since the triple-layer tensor \
+        at a vertex has no representation of its own. Use `kettensor`, `operatortensor` and \
+        `bratensor` to reach the individual layers."
     )
-end
-
-function QuadraticFormNetwork(ket::ITensorNetwork, operator::ITensorNetworkOperator)
-    names_bra = Indices(union(linknames(ket), inputnames(operator)))
-    return QuadraticFormNetwork(ket, operator, map(uniquename, names_bra))
 end
 
 # ==================================== DataGraphs.jl ===================================== #
 
 function DataGraphs.get_vertex_data(qf::QuadraticFormNetwork, vertex)
     return error(
-        "Indexing a `QuadraticFormNetwork` is not defined, since the triple-layer tensor at a vertex has no representation of its own. Use `kettensor`, `operatortensor` and `bratensor` to reach the individual layers."
+        "Indexing a `QuadraticFormNetwork` is not defined, since the triple-layer tensor at \
+        a vertex has no representation of its own. Use `kettensor`, `operatortensor` and \
+        `bratensor` to reach the individual layers."
     )
 end
 
@@ -80,17 +99,15 @@ function operatortensor(qf::QuadraticFormNetwork, vertex)
 end
 
 """
-    quadraticformnetwork(tn::ITensorNetwork, op::ITensorNetworkOperator, [braname])
+    quadraticformnetwork([f::Function], tn::ITensorNetwork, op::ITensorNetworkOperator, [linknames])
+    quadraticformnetwork(tn::ITensorNetwork, op::ITensorNetworkOperator, braname::Dictionary)
 
-Build the triple-layer network `⟨tn|op|tn⟩`, represented lazily as a
-`QuadraticFormNetwork` object. The optional third argument `braname` should implement
-`braname[ketdimname] = bradimname` for every link dimension name `ketdimname` in `tn` and
-every dimension name of `tn` the operator acts on. If this is not specified, then a name is
-generated via the `ITensorBase.uniquename` function.
+Build the triple-layer network `⟨tn|op|tn⟩`, represented lazily as a `QuadraticFormNetwork`
+object. Each ket index name in `linknames` (by default `linknames(tn)`) and each input name of
+`op` gets the bra name `f(name)`, where `f` defaults to `name -> derivedname(name, "bra")`.
+Alternatively pass the ket→bra name map `braname` directly. Either way the names mapped must
+include every link name of `tn` and every input name of `op` and may include others, and an
+error is thrown if one is missing, two bra names coincide or a bra name is already an index
+name of `tn` or `op`.
 """
-function quadraticformnetwork(tn::ITensorNetwork, op::ITensorNetworkOperator)
-    return QuadraticFormNetwork(tn, op)
-end
-function quadraticformnetwork(tn::ITensorNetwork, op::ITensorNetworkOperator, braname)
-    return QuadraticFormNetwork(tn, op, braname)
-end
+quadraticformnetwork(args...) = QuadraticFormNetwork(args...)
