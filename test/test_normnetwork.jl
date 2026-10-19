@@ -1,8 +1,8 @@
 using DataGraphs: is_vertex_assigned
 using Dictionaries: Indices, isinsertable, issettable
 using Graphs: edges, vertices
-using ITensorBase: ITensor, Index, IndexName, inds, name, nametype, plev, prime, setname,
-    tags, uniquename
+using ITensorBase:
+    ITensor, Index, IndexName, inds, name, nametype, plev, prime, setname, tags, uniquename
 using ITensorNetworksNext: BraView, Greedy, ITensorNetwork, NormNetwork, braname,
     branetwork, bratensor, conj_bratensor, contraction_tree, derivedname, flatten_network,
     ketnetwork, kettensor, linknames, normnetwork, prod_tensors, tensornetwork
@@ -139,7 +139,8 @@ contract_norm(nn) = prod_tensors(flatten_network(nn), Greedy())[]
         # own bra name and the two layers at vertex 2 share only the site index.
         lname = name(l[NamedEdge(2 => 3)])
         @test braname(nn, lname) != lname
-        shared = intersect(name.(inds(kettensor(nn, 2))), name.(inds(conj_bratensor(nn, 2))))
+        shared =
+            intersect(name.(inds(kettensor(nn, 2))), name.(inds(conj_bratensor(nn, 2))))
         @test issetequal(shared, [name(s[2])])
     end
 

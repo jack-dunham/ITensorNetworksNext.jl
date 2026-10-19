@@ -90,7 +90,8 @@ end
         tn, l, s = random_state(Float64, g)
 
         # Each operator output takes the name the default map would derive for its input.
-        out = Dict(v => setname(Index(2), derivedname(name(s[v]), :bra)) for v in vertices(g))
+        out =
+            Dict(v => setname(Index(2), derivedname(name(s[v]), :bra)) for v in vertices(g))
         optn = tensornetwork(v -> ITensor(Matrix(1.0I, 2, 2), (out[v], s[v])), vertices(g))
         vs = collect(vertices(g))
         op = operator(optn, [name(out[v]) for v in vs], [name(s[v]) for v in vs])
