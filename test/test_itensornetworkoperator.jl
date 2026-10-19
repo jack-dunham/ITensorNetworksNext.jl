@@ -81,6 +81,13 @@ end
         @test_throws ArgumentError operator(
             tn, [name(out[vs[1]]), name(out[vs[1]])], [name(inp[vs[1]]), name(inp[vs[1]])]
         )
+        # An input name can be paired with only one output, and no name is both.
+        @test_throws ArgumentError operator(
+            tn, [name(out[vs[1]]), name(out[vs[2]])], [name(inp[vs[1]]), name(inp[vs[1]])]
+        )
+        @test_throws ArgumentError operator(
+            tn, [name(out[vs[1]]), name(inp[vs[1]])], [name(inp[vs[1]]), name(out[vs[2]])]
+        )
 
         # An operator leg must be dangling: a link name touches two vertices.
         l = Index(2)
