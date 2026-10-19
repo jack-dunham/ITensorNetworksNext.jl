@@ -85,6 +85,37 @@ end
         @test_throws ErrorException QuadraticFormNetwork(tn, op)
     end
 
+    @testset "operator input on a different vertex of the ket network" begin
+        g = named_path_graph(2)
+        tn, l, s = random_state(Float64, g)
+        out1, out2 = Index(2), Index(2)
+        optn = ITensorNetwork(Dict(1 => randn((out1, s[2])), 2 => randn((out2, s[1]))))
+        op = operator(optn, [name(out1), name(out2)], [name(s[2]), name(s[1])])
+        @test_throws ErrorException QuadraticFormNetwork(tn, op)
+    end
+
+    @testset "operator input equal to a ket link name" begin
+        g = named_path_graph(2)
+        tn, l, s = random_state(Float64, g)
+        e = only(edges(g))
+        out1, out2 = Index(2), Index(2)
+        optn = ITensorNetwork(Dict(1 => randn((out1, l[e])), 2 => randn((out2, s[2]))))
+        op = operator(optn, [name(out1), name(out2)], [name(l[e]), name(s[2])])
+        @test_throws ErrorException QuadraticFormNetwork(tn, op)
+    end
+
+    @testset "operator link name equal to a ket link name" begin
+        g = named_path_graph(2)
+        tn, l, s = random_state(Float64, g)
+        e = only(edges(g))
+        out1, out2 = Index(2), Index(2)
+        optn = ITensorNetwork(
+            Dict(1 => randn((out1, s[1], l[e])), 2 => randn((out2, s[2], l[e])))
+        )
+        op = operator(optn, [name(out1), name(out2)], [name(s[1]), name(s[2])])
+        @test_throws ErrorException QuadraticFormNetwork(tn, op)
+    end
+
     @testset "a default bra name equal to an operator name" begin
         g = named_path_graph(3)
         tn, l, s = random_state(Float64, g)

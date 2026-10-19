@@ -50,10 +50,21 @@ function check_input(::Type{<:QuadraticFormNetwork}, ket, operator, braname)
     if !issetequal(vertices(operator), vertices(ket))
         error("the operator layer must be defined on every vertex of the ket layer.")
     end
-    if !issubset(inputnames(operator), keys(ket.dimname_vertices))
-        error("every operator input name must be an index name of the ket layer.")
+    inputs = inputnames(operator)
+    for input in inputs
+        if !has_dimname(ket, input)
+            error("operator input name $input is not an index name of the ket layer.")
+        end
+        if dimnamevertices(ket, input) != dimnamevertices(state(operator), input)
+            error("operator input name $input must be a ket site index on the same vertex.")
+        end
     end
-    if !issubset(inputnames(operator), keys(braname))
+    for vertex in vertices(operator), name in names(state(operator), vertex)
+        if name ∉ inputs && has_dimname(ket, name)
+            error("operator index name $name is not an input but is a ket index name.")
+        end
+    end
+    if !issubset(inputs, keys(braname))
         error("every operator input name must have a bra name.")
     end
     return check_branamemap(ket, braname, state(operator))

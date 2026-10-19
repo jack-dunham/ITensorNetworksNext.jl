@@ -35,8 +35,10 @@ struct ITensorNetworkOperator{T, V, I, P <: AbstractITensorNetwork{T, V}} <:
                 )
             )
         end
-        if !allunique(outputnames)
-            throw(ArgumentError("each operator output name must appear only once."))
+        if !allunique(vcat(outputnames, inputnames))
+            throw(
+                ArgumentError("each operator output and input name must appear only once.")
+            )
         end
         for opname in Iterators.flatten((outputnames, inputnames))
             nvertices = length(dimnamevertices(parent, opname))
