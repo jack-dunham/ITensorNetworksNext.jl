@@ -3,8 +3,8 @@ using AlgorithmsInterface: AlgorithmsInterface as AI
 using Base: @kwdef
 using Graphs: Graphs, dst, src, vertices
 using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTensor,
-    NamedTensorOperator, apply, inputinds, inputnames, mulopadd!, name, names,
-    nametype, operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
+    NamedTensorOperator, apply, inputinds, inputnames, mulopadd!, name, names, nametype,
+    operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
 using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact, qr_compact!, svd_trunc
 using NamedGraphs: boundary_edges, vertextype

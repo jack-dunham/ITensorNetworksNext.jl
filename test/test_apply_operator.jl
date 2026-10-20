@@ -4,9 +4,9 @@ using Graphs: dst, edges, src, vertices
 using ITensorBase: Index, apply, inputnames, name, names, nametype, operator, outputnames,
     setname, uniquename
 using ITensorNetworksNext: ITensorNetworksNext, BPApplyGate,
-    BeliefPropagationEnvironmentPreparation, MessageUpdateAlgorithm,
-    NormNetwork, SimpleBPGateUpdate, SimpleMessageUpdate, StopWhenVertexRevisited,
-    apply_operator, apply_operator!, apply_operators, apply_operators!, beliefpropagation,
+    BeliefPropagationEnvironmentPreparation, MessageUpdateAlgorithm, NormNetwork,
+    SimpleBPGateUpdate, SimpleMessageUpdate, StopWhenVertexRevisited, apply_operator,
+    apply_operator!, apply_operators, apply_operators!, beliefpropagation,
     bp_gate_factorize!, bp_gate_restore!, bp_gate_split, branamemap, insertlink!,
     message_environment, message_gauge, tensornetwork
 using LinearAlgebra: norm
@@ -211,8 +211,10 @@ end
         end
     end
 
-    @testset "apply_operator! names the new bond as requested ($subalgorithm)" for
-        subalgorithm in (SimpleBPGateUpdate(),)
+    @testset "apply_operator! names the new bond as requested ($subalgorithm)" for subalgorithm in
+        (
+            SimpleBPGateUpdate(),
+        )
         algorithm = BPApplyGate(; subalgorithm)
         gated, gated_env = copy(network), copy(env)
         for v in vertices(g)

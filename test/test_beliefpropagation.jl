@@ -4,19 +4,18 @@ using Dictionaries: Dictionary, dictionary, set!
 using GradedArrays: U1, gradedrange, isdual
 using Graphs: AbstractGraph, add_vertex!, dst, edges, has_edge, has_vertex, ne, nv,
     rem_edge!, src, vertices
-using ITensorBase: ITensor, Index, apply, inds, name, noprime, operator, outputnames, prime,
-    state
+using ITensorBase:
+    ITensor, Index, apply, inds, name, noprime, operator, outputnames, prime, state
 using ITensorNetworksNext: ITensorNetworksNext, ContractionTreeAlgorithm, Greedy,
     ITensorNetwork, MessageCache, NormNetwork, QuadraticFormNetwork, SimpleMessageUpdate,
-    Sliced, StopWhenConverged, beliefpropagation, bethe_free_energy, bethe_free_entropy, bratensor,
-    contraction_tree, edge_scalar, edge_scalars, factor_tensors, incident_subgraph,
-    incoming_messages,
-    insertlink!, kettensor, linkaxes, linkinds, message_environment, messagecache,
-    prod_tensors, region_scalar, subgraph, tensornetwork, updated_message, vertex_scalar,
-    vertex_scalars
+    Sliced, StopWhenConverged, beliefpropagation, bethe_free_energy, bethe_free_entropy,
+    bratensor, contraction_tree, edge_scalar, edge_scalars, factor_tensors,
+    incident_subgraph, incoming_messages, insertlink!, kettensor, linkaxes, linkinds,
+    message_environment, messagecache, prod_tensors, region_scalar, subgraph, tensornetwork,
+    updated_message, vertex_scalar, vertex_scalars
 using LinearAlgebra: LinearAlgebra, norm, tr
-using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree,
-    named_cycle_graph, named_grid, named_path_graph, vertextype
+using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree, named_cycle_graph,
+    named_grid, named_path_graph, vertextype
 using StableRNGs: StableRNG
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
 using TensorKitSectors: FermionParity
@@ -453,8 +452,10 @@ end
             ops, [name(out[v]) for v in vertices(g)], [name(s[v]) for v in vertices(g)]
         )
         @testset "$(nameof(typeof(nn)))" for nn in
-            (NormNetwork(network), QuadraticFormNetwork(network, op))
-
+            (
+                NormNetwork(network),
+                QuadraticFormNetwork(network, op),
+            )
             cache = beliefpropagation(
                 nn, message_environment(one, nn); stopping_criterion = (; maxiter = 2)
             )
