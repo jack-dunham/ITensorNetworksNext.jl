@@ -27,11 +27,9 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [weakdeps]
 OMEinsumContractionOrders = "6f22d1fd-8eed-4bb7-9776-e7d684900715"
-TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
 
 [extensions]
 ITensorNetworksNextOMEinsumContractionOrdersExt = "OMEinsumContractionOrders"
-ITensorNetworksNextTensorOperationsExt = "TensorOperations"
 
 [compat]
 AbstractTrees = "0.4.5"
@@ -51,6 +49,5 @@ Random = "1.10"
 SimpleTraits = "0.9.5"
 SplitApplyCombine = "1.2.3"
 TensorAlgebra = "0.23.1"
-TensorOperations = "5.8"
 UUIDs = "1.10"
 julia = "1.10"

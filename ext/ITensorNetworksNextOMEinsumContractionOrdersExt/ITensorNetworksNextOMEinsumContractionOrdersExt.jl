@@ -30,8 +30,8 @@ end
 
 # `CodeOptimizer` cannot subtype `ContractionTreeAlgorithm`, so the order-taking form of
 # `prod_tensors` is extended for it here.
-function ITensorNetworksNext.prod_tensors(tensors, alg::CodeOptimizer)
-    return prod_tensors(tensors, contraction_tree(alg, tensors))
+function ITensorNetworksNext.prod_tensors(tensors, alg::CodeOptimizer; kwargs...)
+    return prod_tensors(tensors, contraction_tree(alg, tensors); kwargs...)
 end
 
 end

@@ -8,7 +8,7 @@ using ITensorBase: ITensor, Index, apply, inds, name, noprime, operator, outputn
     state
 using ITensorNetworksNext: ITensorNetworksNext, ContractionTreeAlgorithm, Greedy,
     ITensorNetwork, MessageCache, NormNetwork, QuadraticFormNetwork, SimpleMessageUpdate,
-    StopWhenConverged, beliefpropagation, bethe_free_energy, bethe_free_entropy, bratensor,
+    Sliced, StopWhenConverged, beliefpropagation, bethe_free_energy, bethe_free_entropy, bratensor,
     contraction_tree, edge_scalar, edge_scalars, factor_tensors, incident_subgraph,
     incoming_messages,
     insertlink!, kettensor, linkaxes, linkinds, message_environment, messagecache,
@@ -435,6 +435,38 @@ end
             @test only(counts) == 5
             @test message ≈
                 prod_tensors([messages; [kettensor(nn, v) * bratensor(nn, v)]], Greedy())
+        end
+    end
+
+    @testset "`Sliced` message updates and vertex contractions" begin
+        rng = StableRNG(1234)
+        g = named_grid((3, 3))
+        l = Dict(e => Index(4) for e in edges(g))
+        l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+        s = Dict(v => Index(2) for v in vertices(g))
+        network = tensornetwork(vertices(g)) do v
+            return randn(rng, ComplexF64, (s[v], map(e -> l[e], incident_edges(g, v))...))
+        end
+        out = Dict(v => Index(2) for v in vertices(g))
+        ops = tensornetwork(v -> randn(rng, ComplexF64, (out[v], s[v])), vertices(g))
+        op = operator(
+            ops, [name(out[v]) for v in vertices(g)], [name(s[v]) for v in vertices(g)]
+        )
+        @testset "$(nameof(typeof(nn)))" for nn in
+            (NormNetwork(network), QuadraticFormNetwork(network, op))
+
+            cache = beliefpropagation(
+                nn, message_environment(one, nn); stopping_criterion = (; maxiter = 2)
+            )
+            alg = Sliced(; nblocks = 2)
+            @test bethe_free_entropy(nn, cache; alg) ≈ bethe_free_entropy(nn, cache)
+            @test bethe_free_energy(nn, cache; alg) ≈ bethe_free_energy(nn, cache)
+            # Every edge, including those out of the corners, which have one incoming message.
+            sliced, simple = SimpleMessageUpdate(; order_alg = alg), SimpleMessageUpdate()
+            for edge in edges(cache)
+                @test state(updated_message(sliced, cache, nn, edge)) ≈
+                    state(updated_message(simple, cache, nn, edge))
+            end
         end
     end
 end
