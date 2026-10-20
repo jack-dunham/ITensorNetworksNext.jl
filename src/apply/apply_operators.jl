@@ -475,10 +475,16 @@ end
 function apply_gate_bp_nsite!(
         ::Val{1}, dest::AbstractITensorNetwork, op::AbstractITensor,
         state::AbstractITensorNetwork, env, vertices;
-        normalize, kwargs...
+        normalize, subalgorithm, kwargs...
     )
     vertex = only(vertices)
-    ψv = apply(op, state[vertex])
+    t = state[vertex]
+    ψv = rename(t, (inputnames(op) .=> outputnames(op))...)
+    mulopadd!(
+        ψv, identity, ITensorBase.state(op), identity, copy(t), true, false;
+        alg = subalgorithm.contract_alg
+    )
+    ψv = rename(ψv, (outputnames(op) .=> inputnames(op))...)
     if normalize
         sqrt_messages = [
             sqrth_safe(project_hermitian(env[e])) for
