@@ -28,7 +28,8 @@ function prod_tensors(tensors, tree::ContractionTree; conjlist = nothing)
         k = nodevalue(tree)
         return !isnothing(conjlist) && conjlist[k] ? conj(tensors[k]) : tensors[k]
     end
-    return prod_tensors(tensors, tree[1]; conjlist) * prod_tensors(tensors, tree[2]; conjlist)
+    return prod_tensors(tensors, tree[1]; conjlist) *
+        prod_tensors(tensors, tree[2]; conjlist)
 end
 function prod_tensors(tensors, alg::ContractionTreeAlgorithm; kwargs...)
     return prod_tensors(tensors, contraction_tree(alg, tensors); kwargs...)

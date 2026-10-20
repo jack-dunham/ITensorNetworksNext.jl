@@ -3,8 +3,8 @@ using Graphs: edges, src, vertices
 using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, operator,
     outputnames, state, unnamed
 using ITensorNetworksNext: Greedy, ITensorNetwork, NormNetwork, Sliced, beliefpropagation,
-    conj_bratensor, incoming_messages, kettensor, linkinds, message_environment, prod_tensors,
-    siteinds, tensornetwork
+    conj_bratensor, incoming_messages, kettensor, linkinds, message_environment,
+    prod_tensors, siteinds, tensornetwork
 using JLArrays: JLArray
 using NamedGraphs: NamedEdge, incident_edges, named_grid
 using OMEinsumContractionOrders: ExhaustiveSearch, GreedyMethod, TreeSA
@@ -124,7 +124,8 @@ end
         # The message update at the centre towards (2, 3), whose open indices have length 4.
         edge = NamedEdge((2, 2) => (2, 3))
         v = src(edge)
-        tensors = [kettensor(nn, v); incoming_messages(cache, edge)...; conj_bratensor(nn, v)]
+        tensors =
+            [kettensor(nn, v); incoming_messages(cache, edge)...; conj_bratensor(nn, v)]
         conjlist = [falses(length(tensors) - 1); true]
         reference = prod_tensors(tensors, Greedy(); conjlist)
         device_tensors = map(t -> adapt(arraytype, state(t)), tensors)
