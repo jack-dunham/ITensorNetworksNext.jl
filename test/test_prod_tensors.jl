@@ -3,12 +3,29 @@ using Graphs: edges, src, vertices
 using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, operator,
     outputnames, state, unnamed
 using ITensorNetworksNext: Greedy, ITensorNetwork, NormNetwork, Sliced, beliefpropagation,
-    conj_bratensor, incoming_messages, kettensor, linkinds, message_environment, prod_tensors, siteinds,
-    tensornetwork
+    conj_bratensor, incoming_messages, kettensor, linkinds, message_environment, prod_tensors,
+    siteinds, tensornetwork
 using JLArrays: JLArray
 using NamedGraphs: NamedEdge, incident_edges, named_grid
 using OMEinsumContractionOrders: ExhaustiveSearch, GreedyMethod, TreeSA
+using TensorAlgebra: TensorOperationsContract
+using TensorOperations: TensorOperations
 using Test: @test, @testset
+
+# Records the arrays it allocates as temporaries and the arrays it is asked to free.
+struct RecordingAllocator
+    temporaries::Vector{Any}
+    freed::Vector{Any}
+end
+function TensorOperations.tensoralloc(ttype, structure, ::Val{true}, a::RecordingAllocator)
+    C = TensorOperations.tensoralloc(ttype, structure, Val(true))
+    push!(a.temporaries, C)
+    return C
+end
+function TensorOperations.tensorfree!(C, a::RecordingAllocator)
+    push!(a.freed, C)
+    return nothing
+end
 
 @testset "prod_tensors" begin
     @testset "Contract Vectors of ITensors" begin
@@ -111,10 +128,21 @@ using Test: @test, @testset
         conjlist = [falses(length(tensors) - 1); true]
         reference = prod_tensors(tensors, Greedy(); conjlist)
         device_tensors = map(t -> adapt(arraytype, state(t)), tensors)
-        for nblocks in (1, 2, 3, 4)
-            result = prod_tensors(device_tensors, Sliced(; nblocks); conjlist)
+        for nblocks in (1, 2, 3, 4), contract_alg in (nothing, TensorOperationsContract())
+            result = prod_tensors(device_tensors, Sliced(; nblocks, contract_alg); conjlist)
             @test unnamed(result) isa arraytype
             @test ITensor(Array(unnamed(result)), inds(result)) ≈ state(reference)
         end
+
+        # Every intermediate is freed. TensorOperations frees its own scratch copies through
+        # their `Memory`, so they are matched by pointer.
+        allocator = RecordingAllocator([], [])
+        contract_alg = TensorOperationsContract(; allocator)
+        result = prod_tensors(device_tensors, Sliced(; nblocks = 2, contract_alg); conjlist)
+        @test ITensor(Array(unnamed(result)), inds(result)) ≈ state(reference)
+        @test !isempty(allocator.temporaries)
+        @test all(
+            a -> any(f -> pointer(f) == pointer(a), allocator.freed), allocator.temporaries
+        )
     end
 end
