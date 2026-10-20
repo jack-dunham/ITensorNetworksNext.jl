@@ -273,9 +273,10 @@ function message_contraction_tensors(factors::NormNetwork, messages, vertex)
     tensors = [kettensor(factors, vertex); messages...; conj_bratensor(factors, vertex)]
     return tensors, [falses(length(tensors) - 1); true]
 end
+# cuTENSOR faults contracting a sliced ket with the operator, so the messages come first.
 function message_contraction_tensors(factors::QuadraticFormNetwork, messages, vertex)
     tensors = [
-        kettensor(factors, vertex); operatortensor(factors, vertex); messages...;
+        kettensor(factors, vertex); messages...; operatortensor(factors, vertex);
         conj_bratensor(factors, vertex)
     ]
     return tensors, [falses(length(tensors) - 1); true]
