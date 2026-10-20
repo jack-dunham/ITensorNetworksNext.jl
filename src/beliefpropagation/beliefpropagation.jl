@@ -263,12 +263,31 @@ function factor_tensors(factors::QuadraticFormNetwork, vertex)
     ]
 end
 
+# The operands contracted at `vertex` with `messages`, ket first, and the flags `prod_tensors`
+# conjugates them by. The bra is `conj_bratensor`, which shares the ket's data.
+function message_contraction_tensors(factors, messages, vertex)
+    tensors = [factors[vertex]; messages...]
+    return tensors, falses(length(tensors))
+end
+function message_contraction_tensors(factors::NormNetwork, messages, vertex)
+    tensors = [kettensor(factors, vertex); messages...; conj_bratensor(factors, vertex)]
+    return tensors, [falses(length(tensors) - 1); true]
+end
+# cuTENSOR faults contracting a sliced ket with the operator, so the messages come first.
+function message_contraction_tensors(factors::QuadraticFormNetwork, messages, vertex)
+    tensors = [
+        kettensor(factors, vertex); messages...; operatortensor(factors, vertex);
+        conj_bratensor(factors, vertex)
+    ]
+    return tensors, [falses(length(tensors) - 1); true]
+end
+
 # Contract the incoming messages into the source factor to form the (unnormalized) new message on
 # `edge`.
 function updated_message(algorithm::SimpleMessageUpdate, cache, factors, edge)
-    messages = collect(incoming_messages(cache, edge))
-    tensors = [messages; factor_tensors(factors, src(edge))]
-    return prod_tensors(tensors, algorithm.order_alg)
+    messages = incoming_messages(cache, edge)
+    tensors, conjlist = message_contraction_tensors(factors, messages, src(edge))
+    return prod_tensors(tensors, algorithm.order_alg; conjlist)
 end
 
 # Single-layer network: the message is a plain bond vector, normalized by its entrywise sum.
@@ -282,11 +301,13 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors, edge)
     return cache
 end
 
-# `NormNetwork`: the message is a doubled (ket/bra) bond operator. Contracting a plain vertex factor
-# with the incoming messages leaves the surviving bond legs dangling, so assign the bra/ket pairing
-# the norm network gives this edge (the same convention as `similar_message_environment`), in which
-# the message is positive semidefinite and its trace is a positive normalization.
-function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNetwork, edge)
+# Bilinear-form network: the message is a doubled (ket/bra) bond operator. Contracting a plain
+# vertex factor with the incoming messages leaves the surviving bond legs dangling, so assign the
+# bra/ket pairing the network gives this edge (the same convention as `similar_message_environment`).
+# On a `NormNetwork` the message is positive semidefinite and its trace is a positive normalization.
+function bilinearform_message_update!(
+        algorithm, cache, factors::AbstractBilinearFormNetwork, edge
+    )
     new_tensor = updated_message(algorithm, cache, factors, edge)
     new_message = operator(new_tensor, outputnames(cache[edge]), inputnames(cache[edge]))
     if algorithm.normalize
@@ -295,6 +316,12 @@ function message_update!(algorithm::SimpleMessageUpdate, cache, factors::NormNet
     end
     cache[edge] = new_message
     return cache
+end
+
+function message_update!(
+        algorithm::SimpleMessageUpdate, cache, factors::AbstractBilinearFormNetwork, edge
+    )
+    return bilinearform_message_update!(algorithm, cache, factors, edge)
 end
 
 # === `iterate_diff` for `MessageCache` (used by `AIE.StopWhenConverged`) ===

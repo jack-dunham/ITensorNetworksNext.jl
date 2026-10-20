@@ -1,6 +1,6 @@
 using AbstractTrees: nodevalue
 using Combinatorics: combinations
-using ITensorBase: inds
+using ITensorBase: ITensor, findname, inds, mulopadd!, name, names, state, unnamed
 
 """
     ContractionTreeAlgorithm
@@ -10,25 +10,46 @@ Supertype of the strategies for finding a contraction order. See [`contraction_t
 abstract type ContractionTreeAlgorithm <: AbstractAlgorithm end
 
 """
-    prod_tensors(tensors, tree::ContractionTree)
-    prod_tensors(tensors, alg)
+    prod_tensors(tensors, tree::ContractionTree; conjlist = nothing)
+    prod_tensors(tensors, alg; conjlist = nothing)
     prod_tensors(tensors)
 
 Contract `tensors` in the pairwise order given by `tree`, whose leaf labels index into
 `tensors`. Given an order algorithm instead, find a tree with it first. Given neither, contract
-in key order, folding from the left.
+in key order, folding from the left. The tensors whose labels `conjlist` flags are conjugated.
 
 `tensors` is anything indexable by those labels, so a `Vector` pairs with a tree over positions
 and a tensor network pairs with a tree over vertices.
 """
 function prod_tensors end
 prod_tensors(tensors) = prod_tensors(tensors, left_associative_tree(keys(tensors)))
-function prod_tensors(tensors, tree::ContractionTree)
-    isleaf(tree) && return tensors[nodevalue(tree)]
-    return prod_tensors(tensors, tree[1]) * prod_tensors(tensors, tree[2])
+function prod_tensors(tensors, tree::ContractionTree; conjlist = nothing)
+    if isleaf(tree)
+        k = nodevalue(tree)
+        return !isnothing(conjlist) && conjlist[k] ? conj(tensors[k]) : tensors[k]
+    end
+    return prod_tensors(tensors, tree[1]; conjlist) *
+        prod_tensors(tensors, tree[2]; conjlist)
 end
-function prod_tensors(tensors, alg::ContractionTreeAlgorithm)
-    return prod_tensors(tensors, contraction_tree(alg, tensors))
+function prod_tensors(tensors, alg::ContractionTreeAlgorithm; kwargs...)
+    return prod_tensors(tensors, contraction_tree(alg, tensors); kwargs...)
+end
+
+# `y = x * xs...` left to right with `alg`, conjugating the operands flagged in `conjlist`.
+function prod_tensors!(alg, y, x, xs...; conjlist = falses(length(xs) + 1))
+    op(i) = conjlist[i] ? conj : identity
+    opx = op(1)
+    for (i, m) in enumerate(Base.front(xs))
+        labels = Tuple(symdiff(names(x), names(m)))
+        dims = map(labels) do n
+            return n in names(x) ? size(x, findname(x, n)) : size(m, findname(m, n))
+        end
+        T = promote_type(eltype(x), eltype(m))
+        z = ITensor(similar(unnamed(x), T, dims), labels)
+        mulopadd!(z, opx, x, op(i + 1), m, true, false; alg)
+        x, opx = z, identity
+    end
+    return mulopadd!(y, opx, x, op(length(xs) + 1), last(xs), true, false; alg)
 end
 
 # The tree that folds `labels` from the left, so `(a, b, c)` gives `((a, b), c)`.
@@ -86,4 +107,32 @@ function contraction_tree(::Greedy, tensors)
         is = [is[keep]; [contracted]]
     end
     return only(trees)
+end
+
+"""
+    Sliced(; nblocks::Int, contract_alg = nothing)
+
+Contract left to right in the order the tensors are given, one block of the result at a time,
+with the result's longest index split into ranges of length `cld(length, nblocks)`, so at most
+`nblocks` of them. Each block is written in place by `prod_tensors!` with `contract_alg`, which
+conjugates the tensors flagged in `conjlist` within the contraction rather than copying them.
+"""
+@kwdef struct Sliced{ContractAlg} <: AbstractAlgorithm
+    nblocks::Int
+    contract_alg::ContractAlg = nothing
+end
+
+function prod_tensors(tensors, alg::Sliced; conjlist = falses(length(tensors)))
+    tensors = map(state, tensors)
+    isone(length(tensors)) && return only(conjlist) ? conj(only(tensors)) : only(tensors)
+    is = mapreduce(inds, symdiff, tensors)
+    i = argmax(length, is)
+    T = mapreduce(eltype, promote_type, tensors)
+    storage = similar(unnamed(first(tensors)), T, Tuple(map(length, is)))
+    result = ITensor(storage, Tuple(map(name, is)))
+    for r in Iterators.partition(1:length(i), cld(length(i), alg.nblocks))
+        block = map(t -> name(i) in names(t) ? view(t, name(i) => r) : t, tensors)
+        prod_tensors!(alg.contract_alg, view(result, name(i) => r), block...; conjlist)
+    end
+    return result
 end
