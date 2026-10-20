@@ -1,8 +1,12 @@
-using Graphs: edges, vertices
-using ITensorBase: Index, NamedTensorOperator, inputnames, operator, outputnames, state
-using ITensorNetworksNext:
-    Greedy, ITensorNetwork, linkinds, prod_tensors, siteinds, tensornetwork
-using NamedGraphs: incident_edges, named_grid
+using Adapt: adapt
+using Graphs: edges, src, vertices
+using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, operator,
+    outputnames, state, unnamed
+using ITensorNetworksNext: Greedy, ITensorNetwork, NormNetwork, Sliced, beliefpropagation,
+    conj_bratensor, incoming_messages, kettensor, linkinds, message_environment, prod_tensors, siteinds,
+    tensornetwork
+using JLArrays: JLArray
+using NamedGraphs: NamedEdge, incident_edges, named_grid
 using OMEinsumContractionOrders: ExhaustiveSearch, GreedyMethod, TreeSA
 using Test: @test, @testset
 
@@ -87,5 +91,30 @@ using Test: @test, @testset
         rb = prod_tensors([op, u, w])
         @test outputnames(rb) == outputnames((op * u) * w) == outputnames(op * (u * w))
         @test inputnames(rb) == inputnames((op * u) * w) == inputnames(op * (u * w))
+    end
+
+    @testset "`Sliced` matches `Greedy`, $arraytype" for arraytype in (Array, JLArray)
+        g = named_grid((3, 3))
+        l = Dict(e => Index(4) for e in edges(g))
+        l = merge(l, Dict(reverse(e) => l[e] for e in edges(g)))
+        network = tensornetwork(vertices(g)) do v
+            return randn(ComplexF64, (Index(2), map(e -> l[e], incident_edges(g, v))...))
+        end
+        nn = NormNetwork(network)
+        cache = beliefpropagation(
+            nn, message_environment(one, nn); stopping_criterion = (; maxiter = 2)
+        )
+        # The message update at the centre towards (2, 3), whose open indices have length 4.
+        edge = NamedEdge((2, 2) => (2, 3))
+        v = src(edge)
+        tensors = [kettensor(nn, v); incoming_messages(cache, edge)...; conj_bratensor(nn, v)]
+        conjlist = [falses(length(tensors) - 1); true]
+        reference = prod_tensors(tensors, Greedy(); conjlist)
+        device_tensors = map(t -> adapt(arraytype, state(t)), tensors)
+        for nblocks in (1, 2, 3, 4)
+            result = prod_tensors(device_tensors, Sliced(; nblocks); conjlist)
+            @test unnamed(result) isa arraytype
+            @test ITensor(Array(unnamed(result)), inds(result)) ≈ state(reference)
+        end
     end
 end

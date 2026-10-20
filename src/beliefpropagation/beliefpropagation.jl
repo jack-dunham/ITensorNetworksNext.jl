@@ -263,12 +263,30 @@ function factor_tensors(factors::QuadraticFormNetwork, vertex)
     ]
 end
 
+# The operands contracted at `vertex` with `messages`, ket first, and the flags `prod_tensors`
+# conjugates them by. The bra is `conj_bratensor`, which shares the ket's data.
+function message_contraction_tensors(factors, messages, vertex)
+    tensors = [factors[vertex]; messages...]
+    return tensors, falses(length(tensors))
+end
+function message_contraction_tensors(factors::NormNetwork, messages, vertex)
+    tensors = [kettensor(factors, vertex); messages...; conj_bratensor(factors, vertex)]
+    return tensors, [falses(length(tensors) - 1); true]
+end
+function message_contraction_tensors(factors::QuadraticFormNetwork, messages, vertex)
+    tensors = [
+        kettensor(factors, vertex); operatortensor(factors, vertex); messages...;
+        conj_bratensor(factors, vertex)
+    ]
+    return tensors, [falses(length(tensors) - 1); true]
+end
+
 # Contract the incoming messages into the source factor to form the (unnormalized) new message on
 # `edge`.
 function updated_message(algorithm::SimpleMessageUpdate, cache, factors, edge)
-    messages = collect(incoming_messages(cache, edge))
-    tensors = [messages; factor_tensors(factors, src(edge))]
-    return prod_tensors(tensors, algorithm.order_alg)
+    messages = incoming_messages(cache, edge)
+    tensors, conjlist = message_contraction_tensors(factors, messages, src(edge))
+    return prod_tensors(tensors, algorithm.order_alg; conjlist)
 end
 
 # Single-layer network: the message is a plain bond vector, normalized by its entrywise sum.

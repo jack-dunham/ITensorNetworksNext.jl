@@ -142,20 +142,34 @@ function incident_subgraph(graph::AbstractGraph, vertices)
     return edge_subgraph(graph, edges)
 end
 
-function vertex_scalar(factors, messages, vertex; kwargs...)
+function vertex_scalar(factors, messages, vertex; alg = Greedy())
+    return vertex_scalar(alg, factors, messages, vertex)
+end
+function vertex_scalar(alg, factors, messages, vertex)
     in_messages = incoming_edge_data(messages, [vertex])
     tensors = [factor_tensors(factors, vertex); collect(in_messages)]
-    return prod_tensors(tensors, contraction_tree(tensors; kwargs...))[]
+    return prod_tensors(tensors, alg)[]
+end
+# A scalar has no open index to slice, so one incoming message is contracted last, leaving its
+# link open in the sliced product.
+function vertex_scalar(alg::Sliced, factors, messages, vertex)
+    in_messages = incoming_edge_data(messages, [vertex])
+    isempty(in_messages) && return vertex_scalar(Greedy(), factors, messages, vertex)
+    rest = Iterators.drop(in_messages, 1)
+    tensors, conjlist = message_contraction_tensors(factors, rest, vertex)
+    return (prod_tensors(tensors, alg; conjlist) * first(in_messages))[]
 end
 
-vertex_scalars(factors, messages) = vertex_scalars(factors, messages, keys(factors))
-function vertex_scalars(factors::AbstractGraph, messages)
-    return vertex_scalars(factors, messages, vertices(factors))
+function vertex_scalars(factors, messages; kwargs...)
+    return vertex_scalars(factors, messages, keys(factors); kwargs...)
+end
+function vertex_scalars(factors::AbstractGraph, messages; kwargs...)
+    return vertex_scalars(factors, messages, vertices(factors); kwargs...)
 end
 # `vertex_scalar` reads a number out of an `ITensor`, whose array field is untyped, so `map` would
 # give element type `Any`; collecting the values instead picks up the type they actually have.
-function vertex_scalars(factors, messages, vertices)
-    return narrow_map(v -> vertex_scalar(factors, messages, v), vertices)
+function vertex_scalars(factors, messages, vertices; kwargs...)
+    return narrow_map(v -> vertex_scalar(factors, messages, v; kwargs...), vertices)
 end
 
 # Takes factors as an unused argument for consistency with `vertex_scalar`.
@@ -186,8 +200,8 @@ function sumlog(terms)
 end
 
 # We need a graph structure here, so assume `factors` is a graph.
-function bethe_free_entropy(factors, messages)
-    numerator_terms = vertex_scalars(factors, messages)
+function bethe_free_entropy(factors, messages; kwargs...)
+    numerator_terms = vertex_scalars(factors, messages; kwargs...)
     denominator_terms = edge_scalars(factors, messages)
 
     if any(iszero, denominator_terms)
@@ -196,7 +210,9 @@ function bethe_free_entropy(factors, messages)
 
     return sumlog(numerator_terms) - sumlog(denominator_terms)
 end
-bethe_free_energy(factors, messages) = -bethe_free_entropy(factors, messages)
+function bethe_free_energy(factors, messages; kwargs...)
+    return -bethe_free_entropy(factors, messages; kwargs...)
+end
 
 # ============================= AbstractBilinearFormNetwork ============================== #
 
