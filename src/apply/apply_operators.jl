@@ -14,8 +14,8 @@ using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
 # Asymmetric (Gram) root of a Hermitian positive semidefinite matrix, as the pair
 # `(root, inv_root)`: `root' * root == m`, and `inv_root * root` is the identity on `m`'s
 # support. `eigh_full` is a square decomposition, so both factors are square.
-function message_gauge(m::AbstractMatrix; kwargs...)
-    d, u = eigh_full(m)
+function message_gauge(m::AbstractMatrix; alg = nothing, kwargs...)
+    d, u = eigh_full(m; alg)
     return sqrth_safe(d; kwargs...) * u', u * invsqrth_safe(d; kwargs...)
 end
 
@@ -411,13 +411,15 @@ end
 # === Default strategy: BPApplyGate ===
 
 """
-    SimpleBPGateUpdate(; contract_alg = nothing)
+    SimpleBPGateUpdate(; contract_alg = nothing, eigh_alg = nothing)
 
 The gate stages of [`BPApplyGate`](@ref), absorbing the message roots with
-[`absorb_matrices!`](@ref) under `contract_alg`.
+[`absorb_matrices!`](@ref) under `contract_alg`. The roots come from `eigh_full` with
+`eigh_alg`, or MatrixAlgebraKit's default for the array type if it is `nothing`.
 """
-@kwdef struct SimpleBPGateUpdate{ContractAlg}
+@kwdef struct SimpleBPGateUpdate{ContractAlg, EighAlg}
     contract_alg::ContractAlg = nothing
+    eigh_alg::EighAlg = nothing
 end
 
 @kwdef struct BPApplyGate{Trunc, Subalgorithm} <: ApplyOperatorAlgorithm
@@ -520,7 +522,9 @@ shares with `env[w => v]`.
 function bp_gate_factorize!(
         subalgorithm::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w
     )
-    roots = [message_gauge(m) for m in incoming_messages(env, v => w)]
+    roots = [
+        message_gauge(m; alg = subalgorithm.eigh_alg) for m in incoming_messages(env, v => w)
+    ]
     ψ = absorb_matrices!(subalgorithm.contract_alg, state[v], first.(roots)...)
     bondname = only(intersect(names(state[v]), names(env[w => v])))
     Q, R = qr_compact!(ψ, setdiff(names(ψ), [bondname], names(op)))
