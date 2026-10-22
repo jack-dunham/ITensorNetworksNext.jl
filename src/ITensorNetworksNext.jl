@@ -13,6 +13,7 @@ include("select_algorithm.jl")
 include("AlgorithmsInterfaceExtensions/AlgorithmsInterfaceExtensions.jl")
 include("abstracttensornetwork.jl")
 include("tensornetwork.jl")
+include("planarembedding.jl")
 include("itensornetworkoperator.jl")
 include("bilinearforms/abstractbilinearformnetwork.jl")
 include("bilinearforms/normnetwork.jl")
@@ -23,6 +24,10 @@ include("prod_tensors.jl")
 
 include("beliefpropagation/messagecache.jl")
 include("beliefpropagation/beliefpropagation.jl")
+include("mpbp/ctmenvironment.jl")
+include("mpbp/invariantsubspace.jl")
+include("mpbp/faceupdate.jl")
+include("mpbp/ctmrg.jl")
 
 include("apply/apply_operators.jl")
 

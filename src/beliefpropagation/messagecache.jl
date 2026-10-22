@@ -1,12 +1,11 @@
 using DataGraphs: DataGraphs, AbstractDataGraph, AbstractEdgeDataGraph, edge_data,
     edge_data_type, set_vertex_data!, underlying_graph, underlying_graph_type, vertex_data,
     vertex_data_type
-using Dictionaries: Dictionary, getindices, set!, unset!
+using Dictionaries: Dictionary, Indices, set!, unset!
 using Graphs: AbstractGraph, connected_components, edges, is_directed, is_tree
 using ITensorBase: inputnames, outputnames, state, unnamed
 using NamedGraphs: AbstractNamedEdge, NamedDiGraph, NamedEdge, add_edges!, arrange_edge,
-    boundary_edges, edge_subgraph, in_incident_edges, incident_edges, to_graph_index,
-    vertextype
+    edge_subgraph, in_incident_edges, incident_edges, to_graph_index, vertextype
 using SplitApplyCombine: mapmany
 
 struct MessageCache{T, V} <: AbstractEdgeDataGraph{T, V}
@@ -101,6 +100,12 @@ end
 Dictionaries.issettable(::MessageCache) = true
 Dictionaries.isinsertable(::MessageCache) = true
 
+# The messages on `edges`, in that order, as a DataGraphs view of the cache's edge data; writes
+# to an existing edge go through to the cache.
+function Base.view(cache::MessageCache, edges::AbstractVector{<:AbstractEdge})
+    return view(cache, Indices(edges))
+end
+
 function Base.map(f, cache::MessageCache)
     new_cache = similar_graph(cache, Base.promote_op(f, valtype(cache)))
     map!(f, new_cache, cache)
@@ -121,14 +126,13 @@ function incoming_messages(cache::AbstractGraph, pair::Pair)
     return incoming_messages(cache, edge)
 end
 function incoming_messages(cache::AbstractGraph, edge::AbstractEdge)
-    in_edges = Indices(in_incident_edges(cache, src(edge)))
-    return getindices(cache, filter(e -> e != reverse(edge), in_edges))
+    return environment_tensors(cache, src(edge); exclude = (dst(edge),))
 end
 
-# TODO: maybe this should be defined in `DataGraphs`.
-function incoming_edge_data(cache::AbstractGraph, vertices)
-    in_edges = Indices(boundary_edges(cache, vertices; dir = :in))
-    return getindices(cache, in_edges)
+# A vertex is anything that is not an edge or a `Pair`. `exclude` drops the tensors that touch
+# the listed neighbours of `vertex`.
+function environment_tensors(messages::AbstractGraph, vertex; exclude = ())
+    return [messages[e] for e in in_incident_edges(messages, vertex) if src(e) ∉ exclude]
 end
 
 """
@@ -142,22 +146,31 @@ function incident_subgraph(graph::AbstractGraph, vertices)
     return edge_subgraph(graph, edges)
 end
 
-function vertex_scalar(factors, messages, vertex; alg = Greedy())
-    return vertex_scalar(alg, factors, messages, vertex)
+function environment_tensors(messages::AbstractGraph, edge::Union{AbstractEdge, Pair})
+    return [messages[edge], messages[reverse(edge)]]
 end
-function vertex_scalar(alg, factors, messages, vertex)
-    in_messages = incoming_edge_data(messages, [vertex])
-    tensors = [factor_tensors(factors, vertex); collect(in_messages)]
+
+# `tensor`, when given, stands in for the factor tensors at `vertex`.
+function vertex_scalar(factors, env, vertex; tensor = nothing, alg = Greedy())
+    return vertex_scalar(alg, factors, env, vertex; tensor)
+end
+function vertex_scalar(alg, factors, env, vertex; tensor = nothing)
+    vertex_tensors = isnothing(tensor) ? factor_tensors(factors, vertex) : [tensor]
+    tensors = [vertex_tensors; environment_tensors(env, vertex)]
     return prod_tensors(tensors, alg)[]
 end
-# A scalar has no open index to slice, so one incoming message is contracted last, leaving its
+# A scalar has no open index to slice, so one environment tensor is contracted last, leaving its
 # link open in the sliced product.
-function vertex_scalar(alg::Sliced, factors, messages, vertex)
-    in_messages = incoming_edge_data(messages, [vertex])
-    isempty(in_messages) && return vertex_scalar(Greedy(), factors, messages, vertex)
-    rest = Iterators.drop(in_messages, 1)
-    tensors, conjlist = message_contraction_tensors(factors, rest, vertex)
-    return (prod_tensors(tensors, alg; conjlist) * first(in_messages))[]
+function vertex_scalar(alg::Sliced, factors, env, vertex; tensor = nothing)
+    env_tensors = environment_tensors(env, vertex)
+    isempty(env_tensors) && return vertex_scalar(Greedy(), factors, env, vertex; tensor)
+    rest = env_tensors[2:end]
+    tensors, conjlist = if isnothing(tensor)
+        message_contraction_tensors(factors, rest, vertex)
+    else
+        [tensor; rest], falses(length(rest) + 1)
+    end
+    return (prod_tensors(tensors, alg; conjlist) * first(env_tensors))[]
 end
 
 function vertex_scalars(factors, messages; kwargs...)
@@ -173,7 +186,8 @@ function vertex_scalars(factors, messages, vertices; kwargs...)
 end
 
 # Takes factors as an unused argument for consistency with `vertex_scalar`.
-edge_scalar(_factors, messages, edge) = (messages[edge] * messages[reverse(edge)])[]
+edge_scalar(_factors, env, edge) = prod_tensors(environment_tensors(env, edge), Greedy())[]
+face_scalar(_factors, env, face) = prod_tensors(environment_tensors(env, face), Greedy())[]
 edge_scalars(factors, messages) = edge_scalars(factors, messages, edges(factors))
 function edge_scalars(factors, messages, edges)
     return narrow_map(e -> edge_scalar(factors, messages, e), edges)
@@ -199,19 +213,27 @@ function sumlog(terms)
     return s isa Real && s > 0 ? d : d + log(complex(s))
 end
 
+# Returns a tuple of numerator term collections and the denominator terms.
+function kikuchi_terms(factors, messages; kwargs...)
+    return (vertex_scalars(factors, messages; kwargs...),), edge_scalars(factors, messages)
+end
+
 # We need a graph structure here, so assume `factors` is a graph.
-function bethe_free_entropy(factors, messages; kwargs...)
-    numerator_terms = vertex_scalars(factors, messages; kwargs...)
-    denominator_terms = edge_scalars(factors, messages)
+function bethe_free_entropy(factors, env; kwargs...)
+    numerator_terms, denominator_terms = kikuchi_terms(factors, env; kwargs...)
 
     if any(iszero, denominator_terms)
         return -Inf
     end
 
-    return sumlog(numerator_terms) - sumlog(denominator_terms)
+    return sum(sumlog, numerator_terms) - sumlog(denominator_terms)
 end
 function bethe_free_energy(factors, messages; kwargs...)
     return -bethe_free_entropy(factors, messages; kwargs...)
+end
+
+function expect(factors, env, vertex, tensor)
+    return vertex_scalar(factors, env, vertex; tensor) / vertex_scalar(factors, env, vertex)
 end
 
 # ============================= AbstractBilinearFormNetwork ============================== #
