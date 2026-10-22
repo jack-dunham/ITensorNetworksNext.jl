@@ -26,6 +26,14 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 [sources.ITensorNetworksNext]
 path = ".."
 
+[sources.ITensorBase]
+url = "https://github.com/ITensor/ITensorBase.jl"
+rev = "qr-compact-inplace"
+
+[sources.TensorAlgebra]
+url = "https://github.com/ITensor/TensorAlgebra.jl"
+rev = "qr-compact-inplace"
+
 [compat]
 AbstractTrees = "0.4.5"
 Adapt = "4.3"
