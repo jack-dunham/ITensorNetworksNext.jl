@@ -1,7 +1,7 @@
 import AlgorithmsInterface as AI
 using DataGraphs: DataGraphs, DataGraph, edge_data, edge_data_type
 using Dictionaries: Dictionary, dictionary, set!
-using GradedArrays: U1, gradedrange, isdual
+using GradedArrays: U1, dual, gradedrange, isdual
 using Graphs: AbstractGraph, add_vertex!, dst, edges, has_edge, has_vertex, ne, nv,
     rem_edge!, src, vertices
 using ITensorBase:
@@ -10,16 +10,65 @@ using ITensorNetworksNext: ITensorNetworksNext, ContractionTreeAlgorithm, Greedy
     ITensorNetwork, MessageCache, NormNetwork, QuadraticFormNetwork, SimpleMessageUpdate,
     Sliced, StopWhenConverged, beliefpropagation, bethe_free_energy, bethe_free_entropy,
     bratensor, contraction_tree, edge_scalar, edge_scalars, factor_tensors,
-    incident_subgraph, incoming_messages, insertlink!, kettensor, linkaxes, linkinds,
-    message_environment, messagecache, prod_tensors, region_scalar, subgraph, tensornetwork,
-    updated_message, vertex_scalar, vertex_scalars
+    incident_subgraph, incoming_edge_data, incoming_messages, insertlink!, kettensor,
+    linkaxes, linkinds, message_environment, messagecache, prod_tensors, region_scalar,
+    subgraph, tensornetwork, updated_message, vertex_scalar, vertex_scalars
 using LinearAlgebra: LinearAlgebra, norm, tr
 using NamedGraphs: NamedEdge, all_edges, incident_edges, named_comb_tree, named_cycle_graph,
-    named_grid, named_path_graph, vertextype
+    named_grid, named_path_graph, spanning_tree, vertextype
 using StableRNGs: StableRNG
 using TensorAlgebra.MatrixAlgebra: sqrth_invsqrth_safe
-using TensorKitSectors: FermionParity
+using TensorAlgebra: project, project_aux
+using TensorKitSectors: FermionParity, Z2Irrep
 using Test: @test, @testset
+
+# `c†ᵢ cⱼ`, a `c†` and a `c` paired over the auxiliary leg that carries their charge.
+function cdag_c(si::Index, sj::Index)
+    a = project_aux(Float64[0 0; 1 0], (prime(si),), (si,))
+    b = project(reshape(Float64[0 1; 0 0], 2, 2, 1), (prime(sj),), (sj, last(inds(a))))
+    return operator(a, [prime(si)], [si]) * operator(b, [prime(sj)], [sj])
+end
+
+# Belief-propagation estimate of `⟨ψ|op|ψ⟩ / ⟨ψ|ψ⟩` from the doubled `region` of `nn` and the
+# messages coming into it.
+function bp_expectation(op, nn, cache, region)
+    messages = collect(incoming_edge_data(cache, region))
+    ket = prod(v -> kettensor(nn, v), region)
+    bras = [bratensor(nn, v) for v in region]
+    numerator = prod_tensors([messages; apply(op, ket); bras], Greedy())[]
+    return numerator / prod_tensors([messages; ket; bras], Greedy())[]
+end
+
+# Random state on `g` whose sites carry both parities of `sector` and whose bond `e` carries
+# `bondrange(e)`.
+function graded_network(rng, g, sector, bondrange)
+    siterange = gradedrange([sector(0) => 1, sector(1) => 1])
+    links = Dict(e => Index(bondrange(e)) for e in edges(g))
+    sites = Dict(v => Index(siterange) for v in vertices(g))
+    network = tensornetwork(vertices(g)) do v
+        ls = [
+            v == src(e) ? links[e] : dual(links[e])
+                for e in edges(g) if v in (src(e), dst(e))
+        ]
+        return randn(rng, (sites[v], ls...))
+    end
+    return network, sites, links
+end
+
+# Exact and belief-propagation values of `⟨ψ|ψ⟩` and of `⟨c†ᵢ cⱼ⟩` on each edge in `edges`.
+function norm_and_hoppings(network, sites, edges)
+    nn = NormNetwork(network)
+    cache = beliefpropagation(
+        nn, message_environment(one, nn);
+        stopping_criterion = (; maxiter = 50, tol = 1.0e-12)
+    )
+    ket = prod(network)
+    z_exact = (ket * conj(ket))[]
+    ops = [cdag_c(sites[src(e)], sites[dst(e)]) for e in edges]
+    exact = [(conj(ket) * apply(op, ket))[] / z_exact for op in ops]
+    bp = [bp_expectation(op, nn, cache, [src(e), dst(e)]) for (op, e) in zip(ops, edges)]
+    return (; z_exact, z_bp = exp(bethe_free_entropy(nn, cache)), exact, bp)
+end
 
 function spin_ice_tensornetwork(g)
     links = DataGraph(g)
@@ -373,6 +422,55 @@ end
                     eps(real(T))^(1 / 3)
             end
         end
+    end
+
+    # Bonds off a spanning tree have dimension one and odd parity, so belief propagation is exact
+    # and the norm picks up a sign per loop; the tree hoppings test the signs at branching vertices.
+    loopy_graphs = (
+        named_cycle_graph(3), named_cycle_graph(4), named_cycle_graph(5),
+        named_cycle_graph(6), named_grid((2, 2)), named_grid((2, 3)),
+    )
+    @testset "Fermion loops, nv=$(nv(g)), ne=$(ne(g))" for g in loopy_graphs
+        tree = spanning_tree(g)
+        exact_hoppings = map((FermionParity, Z2Irrep)) do sector
+            both = gradedrange([sector(0) => 1, sector(1) => 1])
+            odd = gradedrange([sector(1) => 1])
+            bondrange(e) = has_edge(tree, e) ? both : odd
+            network, sites, _ = graded_network(StableRNG(123), g, sector, bondrange)
+            r = norm_and_hoppings(network, sites, collect(edges(tree)))
+            @test r.z_bp ≈ r.z_exact rtol = 1.0e-10
+            @test r.bp ≈ r.exact atol = 1.0e-10
+            return r.exact
+        end
+        # Hardcore bosons built from the same tensor entries differ by far more than the `atol`
+        # above, and so do their negatives except on the triangle, where the two are opposite.
+        f, b = exact_hoppings
+        @test maximum(abs, f - b) > 1.0e-2
+        nv(g) > 3 && @test maximum(abs, f + b) > 1.0e-3
+    end
+
+    # Every bond carries both parities, with the odd sector weighted by `ε`, so belief propagation
+    # on the cycle is approximate, with a relative error below `1.0e-3` at these lengths.
+    @testset "Fermion cycle of length $L, weak odd sector" for L in (6, 7, 8)
+        g = named_cycle_graph(L)
+        ε = 0.03
+        f, b = map((FermionParity, Z2Irrep)) do sector
+            bondrange = gradedrange([sector(0) => 1, sector(1) => 1])
+            network, sites, links =
+                graded_network(StableRNG(123), g, sector, _ -> bondrange)
+            for e in edges(g)
+                l = links[e]
+                weight =
+                    operator(project([1.0 0; 0 ε], (prime(l),), (l,)), [prime(l)], [l])
+                network[src(e)] = apply(weight, network[src(e)])
+            end
+            return norm_and_hoppings(network, sites, collect(edges(g)))
+        end
+        scale = maximum(abs, f.exact)
+        @test maximum(abs, f.bp - f.exact) < 1.0e-3 * scale
+        # The bosonic hoppings and their negatives are both far outside that tolerance, so
+        # neither dropping the fermion signs nor an overall sign error passes.
+        @test minimum(s -> maximum(abs, f.exact - s * b.exact), (1, -1)) > 1.0e-2 * scale
     end
 
     @testset "QuadraticFormNetwork, T=$T" for T in (Float64, ComplexF64)

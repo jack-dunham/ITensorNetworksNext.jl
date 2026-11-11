@@ -252,7 +252,7 @@ end
         bondnames = (uniquename(nametype(network)), uniquename(nametype(network)))
         v1, v2 = (1, 2), (2, 2)
         apply_operator!(
-            algorithm, gated, gates[1], gated, gated_env; vertices = [v1, v2], bondnames
+            algorithm, gated, gates[1], gated_env; vertices = [v1, v2], bondnames
         )
         @test intersect(names(gated[v1]), names(gated[v2])) == [bondnames[1]]
         for message in (gated_env[v1 => v2], gated_env[v2 => v1])
