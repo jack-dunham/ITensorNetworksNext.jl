@@ -183,7 +183,7 @@ function AI.step!(
     )
     apply_operator!(
         algorithm.operator_algorithm, state.iterate, problem.operators[state.iteration],
-        state.iterate, state.env
+        state.env
     )
     return state
 end
@@ -404,7 +404,7 @@ function apply_operator(
     for v in vertices
         dest[v] = copy(dest[v])
     end
-    apply_operator!(algorithm, dest, operator, dest, env_dest; vertices, kwargs...)
+    apply_operator!(algorithm, dest, operator, env_dest; vertices, kwargs...)
     return dest, env_dest
 end
 
@@ -429,14 +429,14 @@ end
 end
 
 function apply_operator!(
-        algorithm::BPApplyGate, dest, operator, state, env;
+        algorithm::BPApplyGate, state, operator, env;
         vertices = operator_support(state, operator), bondnames = nothing
     )
     apply_gate_bp!(
-        dest, operator, state, env; vertices, algorithm.trunc, algorithm.normalize,
+        state, operator, env; vertices, algorithm.trunc, algorithm.normalize,
         algorithm.subalgorithm, bondnames
     )
-    return dest
+    return state
 end
 
 function initialize_output(
@@ -452,8 +452,7 @@ end
 # === BP simple-update implementation ===
 
 function apply_gate_bp!(
-        dest::AbstractITensorNetwork, op::AbstractITensor,
-        state::AbstractITensorNetwork, env;
+        state::AbstractITensorNetwork, op::AbstractITensor, env;
         vertices = operator_support(state, op), kwargs...
     )
     isempty(vertices) && throw(
@@ -462,43 +461,42 @@ function apply_gate_bp!(
 
     N = Val(length(vertices))
 
-    return apply_gate_bp_nsite!(N, dest, op, state, env, vertices; kwargs...)
+    return apply_gate_bp_nsite!(N, state, op, env, vertices; kwargs...)
 end
 
 function apply_gate_bp_nsite!(
-        ::Val{N}, dest::AbstractITensorNetwork, op::AbstractITensor,
-        state::AbstractITensorNetwork, env, vs; kwargs...
+        ::Val{N}, state::AbstractITensorNetwork, op::AbstractITensor, env, vs;
+        kwargs...
     ) where {N}
     return throw(ArgumentError("$N-site gate decomposition not implemented"))
 end
 
 function apply_gate_bp_nsite!(
-        ::Val{1}, dest::AbstractITensorNetwork, op::AbstractITensor,
-        state::AbstractITensorNetwork, env, vertices;
+        ::Val{1}, state::AbstractITensorNetwork, op::AbstractITensor, env, vertices;
         normalize, subalgorithm, kwargs...
     )
     vertex = only(vertices)
     t = state[vertex]
-    ψv = rename(t, (inputnames(op) .=> outputnames(op))...)
+    o = ITensorBase.state(op)
+    ψv = similar(t, promote_type(eltype(o), eltype(t)), Tuple(symdiff(inds(o), inds(t))))
     mulopadd!(
-        ψv, identity, ITensorBase.state(op), identity, copy(t), true, false;
+        ψv, identity, o, identity, t, true, false;
         alg = subalgorithm.contract_alg
     )
     ψv = rename(ψv, (outputnames(op) .=> inputnames(op))...)
+    state[vertex] = ψv
     if normalize
         sqrt_messages = [
             sqrth_safe(project_hermitian(env[e])) for
                 e in boundary_edges(env, vertices; dir = :in)
         ]
-        ψv /= norm(foldl((ψ, m) -> apply(m, ψ), sqrt_messages; init = ψv))
+        ψv ./= norm(foldl((ψ, m) -> apply(m, ψ), sqrt_messages; init = ψv))
     end
-    dest[vertex] = ψv
-    return dest
+    return state
 end
 
 function apply_gate_bp_nsite!(
-        ::Val{2}, dest::AbstractITensorNetwork, op::AbstractITensor,
-        state::AbstractITensorNetwork, env, vertices;
+        ::Val{2}, state::AbstractITensorNetwork, op::AbstractITensor, env, vertices;
         trunc, normalize, subalgorithm, bondnames = nothing
     )
     v1, v2 = vertices
@@ -507,11 +505,11 @@ function apply_gate_bp_nsite!(
     R_v1, R_v2, message_v1v2, message_v2v1 = bp_gate_split(
         subalgorithm, op, R_v1, R_v2; trunc, normalize, bondnames
     )
-    dest[v1] = bp_gate_restore!(subalgorithm, Q_v1, R_v1, inverse_roots_v1)
-    dest[v2] = bp_gate_restore!(subalgorithm, Q_v2, R_v2, inverse_roots_v2)
+    state[v1] = bp_gate_restore!(subalgorithm, Q_v1, R_v1, inverse_roots_v1)
+    state[v2] = bp_gate_restore!(subalgorithm, Q_v2, R_v2, inverse_roots_v2)
     env[v1 => v2] = message_v1v2
     env[v2 => v1] = message_v2v1
-    return dest
+    return state
 end
 
 """
@@ -529,7 +527,8 @@ function bp_gate_factorize!(
         subalgorithm::SimpleBPGateUpdate, op::AbstractITensor, state, env, v, w
     )
     roots = [
-        message_gauge(m; alg = subalgorithm.eigh_alg) for m in incoming_messages(env, v => w)
+        message_gauge(m; alg = subalgorithm.eigh_alg) for
+            m in incoming_messages(env, v => w)
     ]
     ψ = absorb_matrices!(subalgorithm.contract_alg, state[v], first.(roots)...)
     bondname = only(intersect(names(state[v]), names(env[w => v])))
