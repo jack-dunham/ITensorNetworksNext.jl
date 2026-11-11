@@ -7,7 +7,7 @@ using ITensorBase: AbstractITensor, AbstractNamedTensor, ITensor, Index, NamedTe
     operator, outputinds, outputnames, rename, sim, state, uniquename, unnamed
 using LinearAlgebra: norm, normalize!
 using MatrixAlgebraKit: eigh_full, project_hermitian, qr_compact!, svd_trunc
-using NamedGraphs: boundary_edges, vertextype
+using NamedGraphs: in_incident_edges, vertextype
 using TensorAlgebra.MatrixAlgebra: invsqrth_safe, sqrth_safe
 using TensorAlgebra: MatricizeContract, isdual, matricize, twist!, unmatricize
 
@@ -487,8 +487,7 @@ function apply_gate_bp_nsite!(
     ψv = rename(ψv, (outputnames(op) .=> inputnames(op))...)
     if normalize
         sqrt_messages = [
-            sqrth_safe(project_hermitian(env[e])) for
-                e in boundary_edges(env, vertices; dir = :in)
+            sqrth_safe(project_hermitian(env[e])) for e in in_incident_edges(state, vertex)
         ]
         ψv /= norm(foldl((ψ, m) -> apply(m, ψ), sqrt_messages; init = ψv))
     end
