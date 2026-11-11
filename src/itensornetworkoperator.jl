@@ -3,7 +3,7 @@ using Dictionaries: Dictionaries, Dictionary
 using Graphs: Graphs, AbstractGraph, edges, vertices
 using ITensorBase: ITensorBase, NamedTensorOperator, inputnames, names, nametype, operator,
     outputnames, state
-using NamedGraphs: NamedGraphs, decoded_vertex, encoded_graph, encoded_vertex
+using NamedGraphs: NamedGraphs, decoded_vertex, encoded_graph, encoded_vertex, subgraph
 
 """
     struct ITensorNetworkOperator{T, V, I, P} <: AbstractITensorNetwork{T, V}
@@ -88,6 +88,13 @@ function NamedGraphs.decoded_vertex(op::ITensorNetworkOperator, code::Integer)
     return decoded_vertex(state(op), code)
 end
 NamedGraphs.encoded_graph(op::ITensorNetworkOperator) = encoded_graph(state(op))
+
+# Keeps the pairs on `subvertices`, since the constructor throws for a name on no vertex.
+function NamedGraphs.induced_subgraph_from_vertices(op::ITensorNetworkOperator, subvertices)
+    substate = subgraph(state(op), subvertices)
+    outputs = filter(name -> has_dimname(substate, name), outputnames(op))
+    return operator(substate, outputs, [op.pairing[name] for name in outputs]), subvertices
+end
 
 # ==================================== DataGraphs.jl ===================================== #
 
