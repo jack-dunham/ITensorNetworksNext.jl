@@ -1,6 +1,6 @@
 using AbstractTrees: nodevalue
 using Combinatorics: combinations
-using ITensorBase: ITensor, findname, inds, mulopadd!, name, names, state, unnamed
+using ITensorBase: ITensor, findname, inds, mulopadd!, name, names, rename, state, unnamed
 
 """
     ContractionTreeAlgorithm
@@ -143,4 +143,46 @@ function prod_tensors(tensors, alg::Sliced; conjlist = falses(length(tensors)))
         prod_tensors!(alg.contract_alg, view(result, name(i) => r), block...; conjlist)
     end
     return result
+end
+
+"""
+    absorb_matrices!(alg::Sliced, t, matrices...)
+
+Form the product in `t`'s memory one block at a time, with the longest index of `t` that no
+matrix carries split into at most `alg.nblocks` ranges. Each block of `t` is contracted with
+all the matrices by `prod_tensors!` with `alg.contract_alg` into a block-sized scratch array
+and copied back, so the matrices must be square and no wider in element type than `t`, and
+each must act on a different index of `t`. If every index of `t` is carried by a matrix,
+`absorb_matrices!` with `alg.contract_alg` is used.
+"""
+function absorb_matrices!(alg::Sliced, t, matrices...)
+    isempty(matrices) && return t
+    free = filter(i -> all(m -> name(i) ∉ names(m), matrices), inds(t))
+    isempty(free) && return absorb_matrices!(alg.contract_alg, t, matrices...)
+    for m in matrices
+        if !allequal(size(m)) || promote_type(eltype(t), eltype(m)) !== eltype(t)
+            throw(
+                ArgumentError(
+                    "`absorb_matrices!` with `Sliced` needs square matrices no wider in " *
+                        "element type than $(eltype(t)), got $(eltype(m)) of size " *
+                        "$(size(m))."
+                )
+            )
+        end
+    end
+    replacements = map(matrices) do m
+        return only(intersect(names(m), names(t))) => only(setdiff(names(m), names(t)))
+    end
+    t′ = rename(t, replacements...)
+    i = argmax(length, free)
+    step = cld(length(i), alg.nblocks)
+    scratch = similar(view(t′, name(i) => 1:step))
+    for r in Iterators.partition(1:length(i), step)
+        y = view(scratch, name(i) => 1:length(r))
+        prod_tensors!(alg.contract_alg, y, view(t, name(i) => r), matrices...)
+        # The named `copyto!` aligns its source with `permutedims`, which copies even when
+        # the indices are already in the destination's order, as they are here.
+        copyto!(unnamed(view(t′, name(i) => r)), unnamed(y))
+    end
+    return t′
 end
