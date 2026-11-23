@@ -1,7 +1,7 @@
 using Adapt: adapt
 using Graphs: edges, src, vertices
-using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, name, operator,
-    outputnames, setname, state, uniquename, unnamed
+using ITensorBase: ITensor, Index, NamedTensorOperator, inds, inputnames, name, names,
+    operator, outputnames, setname, state, uniquename, unnamed
 using ITensorNetworksNext: Greedy, ITensorNetwork, NormNetwork, Sliced, absorb_matrices!,
     beliefpropagation, conj_bratensor, incoming_messages, kettensor, linkinds,
     message_environment, prod_tensors, siteinds, tensornetwork
@@ -145,6 +145,34 @@ end
         @test all(
             a -> any(f -> pointer(f) == pointer(a), allocator.freed), allocator.temporaries
         )
+    end
+
+    @testset "absorb_matrices! with `Sliced` matches *, $arraytype" for arraytype in
+        (Array, JLArray)
+        legs = Index.((2, 3, 4, 5))
+        matrix(elt, i) = randn(elt, (setname(i, uniquename(name(i))), i))
+        for nblocks in (1, 2, 3), contract_alg in (nothing, TensorOperationsContract()),
+                n in 0:3
+            ψ = randn(legs)
+            matrices = [matrix(Float64, legs[k]) for k in 1:n]
+            expected = foldl(*, matrices; init = copy(ψ))
+            a = adapt(arraytype, unnamed(ψ))
+            result = absorb_matrices!(
+                Sliced(; nblocks, contract_alg), ITensor(a, names(ψ)),
+                map(m -> adapt(arraytype, state(m)), matrices)...
+            )
+            # The product is written into the input's memory; with `nblocks = 2` the length-5
+            # index is split into ranges of 3 and 2.
+            @test unnamed(result) === a
+            @test ITensor(Array(unnamed(result)), inds(result)) ≈ expected
+        end
+        ψ = randn(legs[1:2])
+        matrices = [matrix(Float64, legs[1]), matrix(Float64, legs[2])]
+        @test absorb_matrices!(Sliced(; nblocks = 2), copy(ψ), matrices...) ≈
+            ψ * matrices[1] * matrices[2]
+        for m in (matrix(ComplexF64, legs[1]), randn((Index(5), legs[1])))
+            @test_throws ArgumentError absorb_matrices!(Sliced(; nblocks = 2), randn(legs), m)
+        end
     end
 
     @testset "absorb_matrices! matches * ($alg)" for alg in (
